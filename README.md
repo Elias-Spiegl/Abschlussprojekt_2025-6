@@ -1,2 +1,8 @@
-# Abschlussprojekt_2025-6
-Das Abschlussprojekt für den Kurs Softwaredesign 3. Semester 2025/6. Autoren: Nico Dörr, Elias Spiegl
+# Softwaredesign Abschlussprojekt
+# Autoren: Nico Dörr, Elias Spiegl
+# Semester 3 (2025 / 26) 
+
+Projektbeschreibung:
+
+
+
