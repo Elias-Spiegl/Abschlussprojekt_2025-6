@@ -30,7 +30,7 @@ class PhysicsSolver:
         return K_global_element
                                             
     @staticmethod
-    def solve_system(K: npt.NDArray[np.float64], F: npt.NDArray[np.float64], fixed_dofs: list[int], eps=1e-9) -> npt.NDArray[np.float64] | None:
+    def solve_system(K: npt.NDArray[np.float64], F: npt.NDArray[np.float64], fixed_dofs: list[int], eps: float = 1e-9) -> npt.NDArray[np.float64] | None:
   
         # Löst das lineare Gleichungssystem Ku = F unter Berücksichtigung der Randbedingungen.
     
