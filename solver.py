@@ -1,101 +1,61 @@
 import numpy as np
 import numpy.typing as npt
 
-def solve(K: npt.NDArray[np.float64], F: npt.NDArray[np.float64], u_fixed_idx: list[int], eps=1e-9) -> npt.NDArray[np.float64] | None:
-    """Solve the linear system Ku = F with fixed boundary conditions.
+class PhysicsSolver:
+    #Klasse für die Berechnungen
 
-    Parameters
-    ----------
-    K : npt.NDArray[np.float64]
-        Stiffness matrix.
-    F : npt.NDArray[np.float64]
-        Force vector.
-    u_fixed_idx : list[int]
-        List of indices where the displacement is fixed (Dirichlet boundary conditions).
-    eps : float, optional
-        Regularization parameter to avoid singular matrix, by default 1e-9
+    @staticmethod
+    def calculate_element_stiffness(k: float, node_i_pos: np.array, node_j_pos: np.array) -> np.ndarray:
 
-    Returns
-    -------
-    npt.NDArray[np.float64] | None
-        Displacement vector or None if the system is unsolvable.
-    """
+        #Berechnet die globale Steifigkeitsmatrix für ein einzelnes Federelement.
 
-    assert K.shape[0] == K.shape[1], "Stiffness matrix K must be square."
-    assert K.shape[0] == F.shape[0], "Force vector F must have the same size as K."
+        # Richtungsvektor bestimmen
+        vec = node_j_pos - node_i_pos
+        length = np.linalg.norm(vec)
+        
+        if length == 0:
+            return np.zeros((4, 4))
 
-    for d in u_fixed_idx:
-        K[d, :] = 0.0
-        K[:, d] = 0.0
-        K[d, d] = 1.0
+        e_n = vec / length # Einheitsvektor
 
-    try:
-        u = np.linalg.solve(K, F) # solve the linear system Ku = F
-        u[u_fixed_idx] = 0.0
+        # Lokale Steifigkeitsmatrix (1D)
+        K_local = k * np.array([[1.0, -1.0], [-1.0, 1.0]])
 
-        return u
+        # Transformationsmatrix O = e_n (outer) e_n
+        O = np.outer(e_n, e_n)
+                            
+        # Globale Elementsteifigkeitsmatrix durch Kronecker-Produkt 4x4 = 2x2 (K_local) kron 2x2 (O)
+        K_global_element = np.kron(K_local, O)
+                                         
+        return K_global_element
+                                            
+    @staticmethod
+    def solve_system(K: npt.NDArray[np.float64], F: npt.NDArray[np.float64], fixed_dofs: list[int], eps: float = 1e-9) -> npt.NDArray[np.float64] | None:
+  
+        # Löst das lineare Gleichungssystem Ku = F unter Berücksichtigung der Randbedingungen.
     
-    except np.linalg.LinAlgError:
-        # If the stiffness matrix is singular we can try a small regularization to still get a solution
-        K += np.eye(K.shape[0]) * eps
+        assert K.shape[0] == K.shape[1],   "Steifigkeitsmatrix K muss quadratisch sein."
+        assert K.shape[0] == F.shape[0],   "Kraftvektor F muss gleichgroß wie K sein."
+          
+        K_calc = K.copy()   # Kopie der Steifigkeitsmatrix, damit wir die Originale nicht verändern
+        F_calc = F.copy()   # Kopie des Kraftvektors
+                  
+        # Randbedingungen der Lager umsetzen
+        # Zeilen und Spalten nullen, Diagonale auf 1 setzen, Kraft auf 0
+        for d in fixed_dofs:
+            K_calc[d, :] = 0.0
+            K_calc[:, d] = 0.0
+            K_calc[d, d] = 1.0
+            F_calc[d] = 0.0 # Verschiebung ist hier 0
 
         try:
-            u = np.linalg.solve(K, F) # solve the linear system Ku = F
-            u[u_fixed_idx] = 0.0
-
+            u = np.linalg.solve(K_calc, F_calc)
             return u
-        
         except np.linalg.LinAlgError:
-            # If it is still singular we give up
-            return None
-
-def test_case_horizontal():
-    # Horizontal spring element between two nodes i and j
-    e_n = np.array([1.0, 0.0])
-    e_n = e_n / np.linalg.norm(e_n)
-
-    k = 1.0
-    K = k * np.array([[1.0, -1.0], [-1.0, 1.0]])
-    print(f"{K=}")
-
-    O = np.outer(e_n, e_n)
-    print(f"{O=}")
-
-    Ko = np.kron(K, O)
-    print(f"{Ko=}")
-
-    u_fixed_idx = [0, 1] # fix node i in both directions
-
-    F = np.array([0.0, 0.0, 10.0, 0.0]) # apply force at node j in x-direction
-
-    u = solve(Ko, F, u_fixed_idx)
-    print(f"{u=}")
-
-def test_case_diagonal():
-    # Diagonal spring element at 45° between two nodes i and j
-    e_n = np.array([1.0, 1.0])
-    e_n = e_n / np.linalg.norm(e_n)
-
-    k = 1.0 / np.sqrt(2.0) # diagonal spring has less stiffness
-    K = k * np.array([[1.0, -1.0], [-1.0, 1.0]])
-    print(f"{K=}")
-
-    O = np.outer(e_n, e_n)
-    print(f"{O=}")
-
-    Ko = np.kron(K, O)
-    print(f"{Ko=}")
-
-    u_fixed_idx = [0, 1] # fix node i in both directions
-
-    F = np.array([0.0, 0.0, 1.0, 1.0]) # apply force at node j in diagonal direction
-
-    u = solve(Ko, F, u_fixed_idx)
-    print(f"{u=}")
-
-if __name__ == "__main__":
-
-    test_case_horizontal()
-
-    test_case_diagonal()
-
+            # Regularisierung falls singulär
+            K_calc += np.eye(K_calc.shape[0]) * eps
+            try:
+                u = np.linalg.solve(K_calc, F_calc)
+                return u
+            except np.linalg.LinAlgError:
+                return None
