@@ -23,7 +23,22 @@ STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_ts(value: str | None) -> str:
+    if not value:
+        return "-"
+    return str(value).replace("T", " ")
+
+
+def max_displacement(structure: Structure) -> float:
+    u_max = 0.0
+    for node in structure.nodes:
+        dist = float((node.u_x ** 2 + node.u_z ** 2) ** 0.5)
+        if dist > u_max:
+            u_max = dist
+    return u_max
 
 
 def load_index() -> list[dict]:
@@ -50,7 +65,7 @@ def model_path(model_id: int) -> Path:
 
 def model_label(meta: dict) -> str:
     name = meta.get("name") or "(ohne Namen)"
-    return f"ID {meta['id']} | {name} | {meta.get('created_at', '-') }"
+    return f"{name} | erstellt: {format_ts(meta.get('created_at'))}"
 
 
 def to_local_table_rows(index: list[dict]) -> list[dict]:
@@ -58,10 +73,9 @@ def to_local_table_rows(index: list[dict]) -> list[dict]:
     for m in sorted(index, key=lambda x: int(x["id"])):
         rows.append(
             {
-                "ID": int(m["id"]),
                 "Name": m.get("name") or "-",
-                "Erstellt": m.get("created_at", "-"),
-                "Geändert": m.get("updated_at", "-"),
+                "Erstellt": format_ts(m.get("created_at")),
+                "Geändert": format_ts(m.get("updated_at")),
                 "Breite": int(m.get("width", 0)),
                 "Höhe": int(m.get("height", 0)),
             }
@@ -116,6 +130,10 @@ if "selected_z" not in st.session_state:
     st.session_state.selected_z = 0
 if "editor_node_id" not in st.session_state:
     st.session_state.editor_node_id = None
+if "existing_load_id" not in st.session_state:
+    st.session_state.existing_load_id = -1
+if "existing_support_id" not in st.session_state:
+    st.session_state.existing_support_id = -1
 
 index = load_index()
 
@@ -156,13 +174,19 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
         st.session_state.selected_x = 0
         st.session_state.selected_z = 0
         st.session_state.editor_node_id = None
-        st.success(f"Modell ID {new_id} erstellt.")
+        st.success("Modell erstellt.")
         st.rerun()
 
     if index:
-        options = {model_label(m): int(m["id"]) for m in sorted(index, key=lambda x: int(x["id"]))}
-        selected_label = st.selectbox("Vorhandene Modelle", list(options.keys()), key="model_select_label")
-        selected_model_id = options[selected_label]
+        sorted_models = sorted(index, key=lambda x: int(x["id"]))
+        model_ids = [int(m["id"]) for m in sorted_models]
+        label_by_id = {int(m["id"]): model_label(m) for m in sorted_models}
+        selected_model_id = st.selectbox(
+            "Vorhandene Modelle",
+            model_ids,
+            key="model_select_id",
+            format_func=lambda mid: label_by_id.get(mid, "Modell"),
+        )
 
         col_m1, col_m2 = st.columns(2)
         with col_m1:
@@ -176,7 +200,7 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
                     st.session_state.selected_x = 0
                     st.session_state.selected_z = 0
                     st.session_state.editor_node_id = None
-                    st.success(f"Modell ID {selected_model_id} geladen.")
+                    st.success("Modell geladen.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Laden fehlgeschlagen: {e}")
@@ -191,7 +215,7 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
                         st.session_state.model_id = None
                         st.session_state.model_name = ""
                         st.session_state.model_created_at = None
-                    st.success(f"Modell ID {selected_model_id} gelöscht.")
+                    st.success("Modell gelöscht.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Löschen fehlgeschlagen: {e}")
@@ -213,14 +237,14 @@ opt = TopologyOptimizer(struct)
 # Current model info + save
 with st.sidebar.expander("2) Aktuelles Modell", expanded=True):
     st.caption(
-        f"ID: {st.session_state.model_id} | Erstellt: {st.session_state.model_created_at}"
+        f"Erstellt: {format_ts(st.session_state.model_created_at)}"
     )
     st.session_state.model_name = st.text_input(
         "Name", value=st.session_state.model_name, key="current_model_name"
     )
     if st.button("Aktuellen Stand speichern", use_container_width=True):
         if st.session_state.model_id is None:
-            st.error("Kein Modell-ID-Kontext vorhanden.")
+            st.error("Kein Modellkontext vorhanden.")
         else:
             metadata = save_model_snapshot(
                 struct,
@@ -231,11 +255,72 @@ with st.sidebar.expander("2) Aktuelles Modell", expanded=True):
             index = [m for m in index if int(m["id"]) != int(metadata["id"])]
             index.append(metadata)
             save_index(index)
-            st.success(f"Modell ID {metadata['id']} gespeichert.")
+            st.success("Modell gespeichert.")
             st.rerun()
 
 # Sidebar: Step 3 - Knoten/Kräfte/Lager
 with st.sidebar.expander("3) Knoten, Kräfte, Lager", expanded=True):
+    load_nodes = [n for n in struct.nodes if n.force_x != 0 or n.force_z != 0]
+    support_nodes = [n for n in struct.nodes if n.fixed_x or n.fixed_z]
+    st.caption(f"Kräfte: {len(load_nodes)} | Lager: {len(support_nodes)}")
+
+    def _jump_to_node(node_id: int) -> None:
+        st.session_state.selected_x = int(node_id % struct.width)
+        st.session_state.selected_z = int(node_id // struct.width)
+        st.session_state.editor_node_id = None
+
+    def _on_load_select_change() -> None:
+        node_id = int(st.session_state.existing_load_id)
+        if node_id >= 0:
+            _jump_to_node(node_id)
+            st.session_state.existing_support_id = -1
+
+    def _on_support_select_change() -> None:
+        node_id = int(st.session_state.existing_support_id)
+        if node_id >= 0:
+            _jump_to_node(node_id)
+            st.session_state.existing_load_id = -1
+
+    if load_nodes:
+        sorted_load_nodes = sorted(load_nodes, key=lambda n: n.id)
+        load_label_by_id = {
+            int(n.id): f"x={int(n.x)}, z={int(n.z)} | Fx={n.force_x:.2f}, Fz={n.force_z:.2f}"
+            for n in sorted_load_nodes
+        }
+        load_option_ids = [-1] + [int(n.id) for n in sorted_load_nodes]
+        if int(st.session_state.existing_load_id) not in load_option_ids:
+            st.session_state.existing_load_id = -1
+        st.selectbox(
+            "Vorhandene Kräfte",
+            load_option_ids,
+            key="existing_load_id",
+            format_func=lambda nid: "Keine Auswahl" if nid < 0 else load_label_by_id.get(nid, "Kraft"),
+            on_change=_on_load_select_change,
+        )
+
+    if support_nodes:
+        support_label_by_id = {}
+        sorted_support_nodes = sorted(support_nodes, key=lambda n: n.id)
+        for n in sorted_support_nodes:
+            if n.fixed_x and n.fixed_z:
+                s_txt = "Festlager"
+            elif (not n.fixed_x) and n.fixed_z:
+                s_txt = "Loslager"
+            else:
+                s_txt = "Sonderfall"
+            support_label_by_id[int(n.id)] = f"x={int(n.x)}, z={int(n.z)} | {s_txt}"
+
+        support_option_ids = [-1] + [int(n.id) for n in sorted_support_nodes]
+        if int(st.session_state.existing_support_id) not in support_option_ids:
+            st.session_state.existing_support_id = -1
+        st.selectbox(
+            "Vorhandene Lager",
+            support_option_ids,
+            key="existing_support_id",
+            format_func=lambda nid: "Keine Auswahl" if nid < 0 else support_label_by_id.get(nid, "Lager"),
+            on_change=_on_support_select_change,
+        )
+
     st.session_state.selected_x = min(max(int(st.session_state.selected_x), 0), struct.width - 1)
     st.session_state.selected_z = min(max(int(st.session_state.selected_z), 0), struct.height - 1)
 
@@ -247,46 +332,12 @@ with st.sidebar.expander("3) Knoten, Kräfte, Lager", expanded=True):
 
     selected_id = int(selected_z) * struct.width + int(selected_x)
     selected_node = struct.nodes[selected_id]
-    st.caption(f"Ausgewählter Knoten: ID {selected_id}")
-
-    load_nodes = [n for n in struct.nodes if n.force_x != 0 or n.force_z != 0]
-    support_nodes = [n for n in struct.nodes if n.fixed_x or n.fixed_z]
-    st.caption(f"Kräfte: {len(load_nodes)} | Lager: {len(support_nodes)}")
-
-    if load_nodes:
-        load_options = {
-            f"ID {n.id} (x={int(n.x)}, z={int(n.z)}) | Fx={n.force_x:.2f}, Fz={n.force_z:.2f}": n.id
-            for n in load_nodes
-        }
-        chosen_load = st.selectbox("Vorhandene Kräfte", list(load_options.keys()), key="existing_loads_select")
-        if st.button("Zu Kraft springen", use_container_width=True):
-            jump_id = load_options[chosen_load]
-            st.session_state.selected_x = jump_id % struct.width
-            st.session_state.selected_z = jump_id // struct.width
-            st.rerun()
-
-    if support_nodes:
-        support_options = {}
-        for n in support_nodes:
-            if n.fixed_x and n.fixed_z:
-                s_txt = "Festlager"
-            elif (not n.fixed_x) and n.fixed_z:
-                s_txt = "Loslager"
-            else:
-                s_txt = "Sonderfall"
-            support_options[f"ID {n.id} (x={int(n.x)}, z={int(n.z)}) | {s_txt}"] = n.id
-        chosen_support = st.selectbox("Vorhandene Lager", list(support_options.keys()), key="existing_supports_select")
-        if st.button("Zu Lager springen", use_container_width=True):
-            jump_id = support_options[chosen_support]
-            st.session_state.selected_x = jump_id % struct.width
-            st.session_state.selected_z = jump_id // struct.width
-            st.rerun()
+    st.caption(f"Ausgewählter Knoten: x={int(selected_x)}, z={int(selected_z)}")
 
     if st.session_state.editor_node_id != selected_id:
         st.session_state.editor_node_id = selected_id
         st.session_state.edit_fx = float(selected_node.force_x)
         st.session_state.edit_fz = float(selected_node.force_z)
-        st.session_state.edit_active = bool(selected_node.active)
         if selected_node.fixed_x and selected_node.fixed_z:
             st.session_state.edit_support_mode = "Festlager"
         elif (not selected_node.fixed_x) and selected_node.fixed_z:
@@ -301,12 +352,10 @@ with st.sidebar.expander("3) Knoten, Kräfte, Lager", expanded=True):
         new_fz = st.number_input("Kraft Z", key="edit_fz")
 
     support_mode = st.selectbox("Lagerzustand", ["Frei", "Loslager", "Festlager"], key="edit_support_mode")
-    node_is_active = st.checkbox("Knoten aktiv (Material vorhanden)", key="edit_active")
 
     if st.button("Knotenänderungen anwenden", use_container_width=True):
         selected_node.force_x = float(new_fx)
         selected_node.force_z = float(new_fz)
-        selected_node.active = bool(node_is_active)
 
         if support_mode == "Frei":
             selected_node.fixed_x = False
@@ -330,7 +379,6 @@ if model_rows:
 # Force/support overview
 force_rows = [
     {
-        "ID": n.id,
         "X": int(n.x),
         "Z": int(n.z),
         "Fx": round(float(n.force_x), 4),
@@ -341,7 +389,6 @@ force_rows = [
 ]
 support_rows = [
     {
-        "ID": n.id,
         "X": int(n.x),
         "Z": int(n.z),
         "Typ": "Festlager" if (n.fixed_x and n.fixed_z) else "Loslager" if ((not n.fixed_x) and n.fixed_z) else "Sonderfall",
@@ -370,10 +417,55 @@ total_nodes = len(struct.nodes)
 
 with col2:
     st.subheader("Visualisierung")
-    scale = st.slider("Verformungsskalierung", 0.0, 0.4, 0.0, step=0.005, format="%.3f")
+
+    # Aktualisiert Verschiebungen für eine konsistente Anzeige.
+    visualization_physics_ok = opt.solve_step()
+    if not visualization_physics_ok:
+        st.warning("Visualisierung: Modell aktuell instabil (Lager/Kräfte prüfen).")
+
+    show_deformation = st.checkbox("Verformung anzeigen", value=True, key="show_deformation")
+    if show_deformation:
+        deformation_display_percent = st.slider(
+            "Verformungsdarstellung (%)", 0, 1000, 100, step=5,
+            help="100% = echte berechnete Verformung, 200% = doppelt dargestellt, 0% = undeformiert."
+        )
+        scale = deformation_display_percent / 100.0
+        st.caption(
+            f"Anzeige-Multiplikator: x {scale:.2f} (100% = echt)"
+        )
+    else:
+        scale = 0.0
+        st.caption("Verformung ist ausgeblendet (undeformte Geometrie).")
+
+    fem_color_map = st.checkbox("FEM-Farbskala für Federn (axiale Dehnung)", value=True, key="fem_colormap")
+    line_width = st.slider("Linienstärke", 0.4, 2.0, 0.8, step=0.1, key="element_line_width")
+    color_percentile = 95
+    if fem_color_map:
+        color_percentile = st.slider(
+            "Farbkontrast (Perzentil, höher = mehr Ausreißer sichtbar)",
+            70,
+            99,
+            95,
+            step=1,
+            key="strain_color_percentile",
+        )
+        show_background_nodes = False
+        st.caption("Hintergrundknoten sind im FEM-Farbmodus ausgeblendet.")
+    else:
+        show_background_nodes = st.checkbox("Hintergrundknoten anzeigen", value=True, key="show_background_nodes")
+
     plot_placeholder = st.empty()
 
-    fig = Visualizer.plot_structure(struct, show_deformation=True, scale_factor=scale, selected_node_id=selected_id)
+    fig = Visualizer.plot_structure(
+        struct,
+        show_deformation=show_deformation,
+        scale_factor=scale,
+        selected_node_id=selected_id,
+        colorize_elements=fem_color_map,
+        color_percentile=color_percentile,
+        show_background_nodes=show_background_nodes,
+        line_width=line_width,
+    )
     plot_placeholder.pyplot(fig)
 
     png_buffer = io.BytesIO()
@@ -396,22 +488,21 @@ with col1:
     target_mass_percent = st.slider("Ziel-Masse (%)", 10, 99, 50)
     st.caption("Entfernungsrate: Dynamisch (1% -> 1.5%)")
 
-    limit_factor = st.slider(
-        "Max. erlaubter Durchbiegungs-Faktor", 1.0, 5.0, 3.0, step=0.1, format="%.2f"
+    max_stiffness_loss_percent = st.slider(
+        "Max. Steifigkeitsverlust (%)", 0, 100, 50, step=1
     )
-    st.caption(f"Objekt darf maximal {limit_factor} x weicher werden als der Start-Block.")
+    allowed_softening_ratio = 1.0 + (max_stiffness_loss_percent / 100.0)
+    st.caption(
+        f"Zulässig bis +{max_stiffness_loss_percent}% Verformung gegenüber der Referenz "
+        f"(entspricht Faktor {allowed_softening_ratio:.2f})."
+    )
 
     if st.button("Starten bis Ziel erreicht"):
         if not opt.solve_step():
             st.error("Start-Modell ist instabil! Bitte Lager/Kräfte prüfen.")
         else:
-            base_max_u = 0.0
-            for n in struct.nodes:
-                dist = float((n.u_x ** 2 + n.u_z ** 2) ** 0.5)
-                if dist > base_max_u:
-                    base_max_u = dist
-
-            abs_limit = base_max_u * limit_factor
+            base_max_u = max_displacement(struct)
+            abs_limit = base_max_u * allowed_softening_ratio
             target_count = int(total_nodes * (target_mass_percent / 100))
 
             status_container = st.empty()
@@ -449,9 +540,13 @@ with col1:
 
                 fig = Visualizer.plot_structure(
                     struct,
-                    show_deformation=True,
+                    show_deformation=show_deformation,
                     scale_factor=scale,
                     selected_node_id=selected_id,
+                    colorize_elements=fem_color_map,
+                    color_percentile=color_percentile,
+                    show_background_nodes=show_background_nodes,
+                    line_width=line_width,
                 )
                 plot_placeholder.pyplot(fig)
                 plt.close(fig)
