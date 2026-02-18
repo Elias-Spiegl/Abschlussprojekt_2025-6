@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import streamlit as st
 
 from model import Structure
@@ -157,7 +156,7 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
         node_right.fixed_z = True
 
         mid_node = struct.nodes[int(width / 2)]
-        mid_node.force_z = 10.0
+        mid_node.force_z = 1.0
 
         new_id = next_model_id(index)
         created_at = now_iso()
@@ -437,22 +436,38 @@ with col2:
         scale = 0.0
         st.caption("Verformung ist ausgeblendet (undeformte Geometrie).")
 
-    fem_color_map = st.checkbox("FEM-Farbskala für Federn (axiale Dehnung)", value=True, key="fem_colormap")
-    line_width = st.slider("Linienstärke", 0.4, 2.0, 0.8, step=0.1, key="element_line_width")
+    fem_color_map = st.checkbox("FEM-Farbskala anzeigen", value=True, key="fem_colormap")
+    line_width = 0.8
     color_percentile = 95
+    color_levels = 15
+    fixed_color_vmax = None
+    normalize_mode = "orientation"
+    element_filter = "all"
+    metric_mode = "energy_per_length"
     if fem_color_map:
-        color_percentile = st.slider(
-            "Farbkontrast (Perzentil, höher = mehr Ausreißer sichtbar)",
-            70,
-            99,
-            95,
-            step=1,
-            key="strain_color_percentile",
-        )
+        c_vis1, c_vis2 = st.columns([1, 1])
+        with c_vis1:
+            element_focus = st.radio(
+                "Elementfokus",
+                options=["Alle", "H+V", "Diagonal"],
+                index=0,
+                horizontal=True,
+                key="element_focus_radio",
+            )
+        with c_vis2:
+            line_width = st.slider(
+                "Linienstärke",
+                min_value=0.4,
+                max_value=2.0,
+                value=0.8,
+                step=0.1,
+                key="line_width_slider",
+            )
+        element_filter = {"Alle": "all", "H+V": "hv", "Diagonal": "diag"}[element_focus]
+        st.caption("Backend: Energie/Länge, pro Richtung normiert, 15 Farbstufen.")
         show_background_nodes = False
-        st.caption("Hintergrundknoten sind im FEM-Farbmodus ausgeblendet.")
     else:
-        show_background_nodes = st.checkbox("Hintergrundknoten anzeigen", value=True, key="show_background_nodes")
+        show_background_nodes = True
 
     plot_placeholder = st.empty()
 
@@ -465,6 +480,11 @@ with col2:
         color_percentile=color_percentile,
         show_background_nodes=show_background_nodes,
         line_width=line_width,
+        color_levels=color_levels,
+        fixed_color_vmax=fixed_color_vmax,
+        metric_mode=metric_mode,
+        normalize_mode=normalize_mode,
+        element_filter=element_filter,
     )
     plot_placeholder.pyplot(fig)
 
@@ -495,6 +515,18 @@ with col1:
     st.caption(
         f"Zulässig bis +{max_stiffness_loss_percent}% Verformung gegenüber der Referenz "
         f"(entspricht Faktor {allowed_softening_ratio:.2f})."
+    )
+    use_postprocess = st.checkbox(
+        "Nach Optimierung verschönern",
+        value=True,
+        help="Füllt kleine Löcher, glättet Ausreißer und verdickt lokal sehr dünne Stränge.",
+    )
+    postprocess_strength = st.slider(
+        "Nachbearbeitung Intensität",
+        min_value=1,
+        max_value=3,
+        value=2,
+        step=1,
     )
 
     if st.button("Starten bis Ziel erreicht"):
@@ -547,19 +579,51 @@ with col1:
                     color_percentile=color_percentile,
                     show_background_nodes=show_background_nodes,
                     line_width=line_width,
+                    color_levels=color_levels,
+                    fixed_color_vmax=fixed_color_vmax,
+                    metric_mode=metric_mode,
+                    normalize_mode=normalize_mode,
+                    element_filter=element_filter,
                 )
                 plot_placeholder.pyplot(fig)
                 plt.close(fig)
                 iteration_count += 1
 
+            postprocess_msg = ""
+            if use_postprocess:
+                pp_stats = opt.beautify_topology(iterations=int(postprocess_strength))
+                current_active = sum(1 for n in struct.nodes if n.active)
+                new_percent = (current_active / total_nodes) * 100
+                mass_info_placeholder.info(f"Aktuelle Masse: {new_percent:.1f}%")
+                fig = Visualizer.plot_structure(
+                    struct,
+                    show_deformation=show_deformation,
+                    scale_factor=scale,
+                    selected_node_id=selected_id,
+                    colorize_elements=fem_color_map,
+                    color_percentile=color_percentile,
+                    show_background_nodes=show_background_nodes,
+                    line_width=line_width,
+                    color_levels=color_levels,
+                    fixed_color_vmax=fixed_color_vmax,
+                    metric_mode=metric_mode,
+                    normalize_mode=normalize_mode,
+                    element_filter=element_filter,
+                )
+                plot_placeholder.pyplot(fig)
+                plt.close(fig)
+                postprocess_msg = (
+                    f" Nachbearbeitung: +{pp_stats['activated']} / -{pp_stats['deactivated']} Knoten."
+                )
+
             if stop_reason:
                 if "Limit" in stop_reason or "Zu weich" in stop_reason or "Keine weiteren" in stop_reason:
-                    st.success(f"Optimierung fertig: {stop_reason}")
+                    st.success(f"Optimierung fertig: {stop_reason}{postprocess_msg}")
                     st.info("Das ist das leichteste Design, das dein Steifigkeits-Limit noch einhält.")
                 else:
                     st.error(f"Fehler: {stop_reason}")
             else:
-                st.success("Ziel-Masse erreicht! (Struktur ist noch steif genug)")
+                st.success(f"Ziel-Masse erreicht! (Struktur ist noch steif genug){postprocess_msg}")
 
     if st.button("Meldungen zurücksetzen"):
         st.rerun()
