@@ -231,3 +231,7 @@ $RECYCLE.BIN/
 .idea/
 .vscode/
 
+# Local app state
+data/model_index.json
+data/states/*.json
+!data/states/.gitkeep
