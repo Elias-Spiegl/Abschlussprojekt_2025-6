@@ -3,7 +3,7 @@ from model import Structure
 
 class Visualizer:
     @staticmethod
-    def plot_structure(structure: Structure, show_deformation=False, scale_factor=1.0):
+    def plot_structure(structure: Structure, show_deformation=False, scale_factor=1.0, selected_node_id=None):
         fig, ax = plt.subplots(figsize=(8, 5))
         
         # Koordinatensystem: z geht nach unten, y-Achse invertieren 
@@ -33,6 +33,9 @@ class Visualizer:
             if node.active:
                 x = node.x + (node.u_x * scale_factor if show_deformation else 0)
                 z = node.z + (node.u_z * scale_factor if show_deformation else 0)
+
+                if selected_node_id is not None and node.id == selected_node_id:
+                    ax.plot(x, z, marker='o', markersize=9, markerfacecolor='none', markeredgecolor='orange', markeredgewidth=2)
                 
                 if node.fixed_x or node.fixed_z:        
                     ax.plot(x, z, 'rs', markersize=5)   # Visualisierung Lager (Rotes Quadrat)
