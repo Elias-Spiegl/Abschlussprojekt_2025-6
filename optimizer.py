@@ -246,3 +246,176 @@ class TopologyOptimizer:
             return False, reason
 
         return True, "OK"   # alle Checks bestanden, Optimierungsschritt erfolgreich
+
+    def beautify_topology(self, iterations: int = 2) -> dict:
+        """
+        Post-Processing nach der Optimierung:
+        - kleine Löcher schließen
+        - zu dünne Stränge lokal verdicken
+        - kleine Ausreißer entfernen
+        """
+        # Sicherstellen, dass aktuelle Verschiebungen für den Lastfall vorliegen.
+        self.solve_step()
+
+        width = int(self.structure.width)
+        height = int(self.structure.height)
+        nodes = self.structure.nodes
+
+        iterations = max(1, int(iterations))
+        total_activated = 0
+        total_deactivated = 0
+
+        protected = np.zeros((height, width), dtype=bool)
+        for n in nodes:
+            if n.force_x != 0 or n.force_z != 0 or n.fixed_x or n.fixed_z:
+                x = int(n.id % width)
+                z = int(n.id // width)
+                protected[z, x] = True
+
+        def _active_mask() -> np.ndarray:
+            mask = np.zeros((height, width), dtype=bool)
+            for n in nodes:
+                x = int(n.id % width)
+                z = int(n.id // width)
+                mask[z, x] = bool(n.active)
+            return mask
+
+        def _collect_reinforcement_candidates(active: np.ndarray) -> set[int]:
+            """
+            Verstärkt lokale Hotspots:
+            Für stark beanspruchte Elemente werden parallel benachbarte Knoten vorgeschlagen.
+            """
+            strain_samples = []
+            elem_data = []
+            for elem in self.structure.elements:
+                if not (elem.node_i.active and elem.node_j.active):
+                    continue
+
+                dx = int(elem.node_j.x - elem.node_i.x)
+                dz = int(elem.node_j.z - elem.node_i.z)
+                if dx == 0 and dz == 0:
+                    continue
+
+                vec = elem.node_j.pos - elem.node_i.pos
+                length = float(np.linalg.norm(vec))
+                if length <= 1e-12:
+                    continue
+                direction = vec / length
+                du = np.array([
+                    elem.node_j.u_x - elem.node_i.u_x,
+                    elem.node_j.u_z - elem.node_i.u_z,
+                ])
+                axial_strain = abs(float(np.dot(du, direction)) / length)
+                strain_samples.append(axial_strain)
+                elem_data.append((elem, dx, dz, axial_strain))
+
+            if not strain_samples:
+                return set()
+
+            threshold = float(np.percentile(np.array(strain_samples, dtype=float), 92.0))
+            active_count = int(np.count_nonzero(active))
+            max_new = max(1, int(active_count * 0.02))
+            ranked = sorted(elem_data, key=lambda x: x[3], reverse=True)
+
+            candidates: set[int] = set()
+            for elem, dx, dz, axial_strain in ranked:
+                if axial_strain < threshold:
+                    break
+
+                x1, z1 = int(elem.node_i.x), int(elem.node_i.z)
+                x2, z2 = int(elem.node_j.x), int(elem.node_j.z)
+
+                # Perpendikulare Richtung auf Rasterebene.
+                perp1 = (-dz, dx)
+                perp2 = (dz, -dx)
+
+                for px, pz in (perp1, perp2):
+                    for bx, bz in ((x1, z1), (x2, z2)):
+                        cx = bx + px
+                        cz = bz + pz
+                        if not (0 <= cx < width and 0 <= cz < height):
+                            continue
+                        if protected[cz, cx] or active[cz, cx]:
+                            continue
+
+                        # Nur hinzufügen, wenn lokal schon Material da ist.
+                        n8 = 0
+                        for ndz in (-1, 0, 1):
+                            for ndx in (-1, 0, 1):
+                                if ndx == 0 and ndz == 0:
+                                    continue
+                                tx = cx + ndx
+                                tz = cz + ndz
+                                if 0 <= tx < width and 0 <= tz < height and active[tz, tx]:
+                                    n8 += 1
+                        if n8 >= 2:
+                            candidates.add(cz * width + cx)
+                            if len(candidates) >= max_new:
+                                return candidates
+
+            return candidates
+
+        for _ in range(iterations):
+            active = _active_mask()
+            activate_ids = set()
+            deactivate_ids = set()
+
+            # 1) Hotspot-Verstärkung (begrenzt)
+            reinforce_ids = _collect_reinforcement_candidates(active)
+            activate_ids.update(reinforce_ids)
+
+            for z in range(height):
+                for x in range(width):
+                    node_id = z * width + x
+                    if protected[z, x]:
+                        continue
+
+                    n8 = 0
+                    n4 = 0
+                    for dz in (-1, 0, 1):
+                        for dx in (-1, 0, 1):
+                            if dx == 0 and dz == 0:
+                                continue
+                            nz = z + dz
+                            nx = x + dx
+                            if 0 <= nx < width and 0 <= nz < height and active[nz, nx]:
+                                n8 += 1
+                                if dx == 0 or dz == 0:
+                                    n4 += 1
+
+                    if not active[z, x]:
+                        # Kleine Löcher schließen / lokale Verdickung
+                        if n8 >= 6 or (n4 >= 3 and n8 >= 4):
+                            activate_ids.add(node_id)
+                    else:
+                        # Isolierte Spitzen oder sehr dünne Ausläufer glätten
+                        if n8 <= 1 or (n8 <= 2 and n4 <= 1):
+                            deactivate_ids.add(node_id)
+
+            for node_id in activate_ids:
+                nodes[node_id].active = True
+            for node_id in deactivate_ids:
+                nodes[node_id].active = False
+
+            if activate_ids or deactivate_ids:
+                is_connected, _ = self.check_stability_and_get_main_component()
+                physics_ok = self.solve_step()
+                if not is_connected or not physics_ok:
+                    # Pass rückgängig machen, falls unzulässig
+                    for node_id in activate_ids:
+                        nodes[node_id].active = False
+                    for node_id in deactivate_ids:
+                        nodes[node_id].active = True
+                    self.solve_step()
+                    break
+
+                total_activated += len(activate_ids)
+                total_deactivated += len(deactivate_ids)
+            else:
+                break
+
+        return {
+            "activated": int(total_activated),
+            "deactivated": int(total_deactivated),
+            "net": int(total_activated - total_deactivated),
+        }
