@@ -31,6 +31,41 @@ def format_ts(value: str | None) -> str:
     return str(value).replace("T", " ")
 
 
+def reset_optimizer_state() -> None:
+    st.session_state.opt_initialized = False
+    st.session_state.opt_running = False
+    st.session_state.opt_history = []
+    st.session_state.opt_view_index = -1
+    st.session_state.opt_iteration = 0
+    st.session_state.opt_target_count = 0
+    st.session_state.opt_start_active = 0
+    st.session_state.opt_abs_limit = 0.0
+    st.session_state.opt_postprocess_done = False
+    st.session_state.opt_stop_reason = ""
+    st.session_state.opt_status_type = "info"
+    st.session_state.opt_status_msg = ""
+
+
+def push_opt_snapshot(structure: Structure) -> None:
+    history = list(st.session_state.opt_history)
+    view_idx = int(st.session_state.opt_view_index)
+    if view_idx < len(history) - 1:
+        history = history[: view_idx + 1]
+    history.append(structure.to_dict())
+    st.session_state.opt_history = history
+    st.session_state.opt_view_index = len(history) - 1
+    st.session_state.opt_iteration = max(0, len(history) - 1)
+
+
+def restore_opt_snapshot(index: int) -> bool:
+    history = st.session_state.opt_history
+    if index < 0 or index >= len(history):
+        return False
+    st.session_state.structure = Structure.from_dict(history[index])
+    st.session_state.opt_view_index = index
+    return True
+
+
 def max_displacement(structure: Structure) -> float:
     u_max = 0.0
     for node in structure.nodes:
@@ -133,6 +168,30 @@ if "existing_load_id" not in st.session_state:
     st.session_state.existing_load_id = -1
 if "existing_support_id" not in st.session_state:
     st.session_state.existing_support_id = -1
+if "opt_initialized" not in st.session_state:
+    st.session_state.opt_initialized = False
+if "opt_running" not in st.session_state:
+    st.session_state.opt_running = False
+if "opt_history" not in st.session_state:
+    st.session_state.opt_history = []
+if "opt_view_index" not in st.session_state:
+    st.session_state.opt_view_index = -1
+if "opt_iteration" not in st.session_state:
+    st.session_state.opt_iteration = 0
+if "opt_target_count" not in st.session_state:
+    st.session_state.opt_target_count = 0
+if "opt_start_active" not in st.session_state:
+    st.session_state.opt_start_active = 0
+if "opt_abs_limit" not in st.session_state:
+    st.session_state.opt_abs_limit = 0.0
+if "opt_postprocess_done" not in st.session_state:
+    st.session_state.opt_postprocess_done = False
+if "opt_stop_reason" not in st.session_state:
+    st.session_state.opt_stop_reason = ""
+if "opt_status_type" not in st.session_state:
+    st.session_state.opt_status_type = "info"
+if "opt_status_msg" not in st.session_state:
+    st.session_state.opt_status_msg = ""
 
 index = load_index()
 
@@ -173,6 +232,7 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
         st.session_state.selected_x = 0
         st.session_state.selected_z = 0
         st.session_state.editor_node_id = None
+        reset_optimizer_state()
         st.success("Modell erstellt.")
         st.rerun()
 
@@ -199,6 +259,7 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
                     st.session_state.selected_x = 0
                     st.session_state.selected_z = 0
                     st.session_state.editor_node_id = None
+                    reset_optimizer_state()
                     st.success("Modell geladen.")
                     st.rerun()
                 except Exception as e:
@@ -214,6 +275,7 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
                         st.session_state.model_id = None
                         st.session_state.model_name = ""
                         st.session_state.model_created_at = None
+                        reset_optimizer_state()
                     st.success("Modell gelöscht.")
                     st.rerun()
                 except Exception as e:
@@ -366,6 +428,7 @@ with st.sidebar.expander("3) Knoten, Kräfte, Lager", expanded=True):
             selected_node.fixed_x = True
             selected_node.fixed_z = True
 
+        reset_optimizer_state()
         st.success(f"Knoten {selected_id} aktualisiert.")
         st.rerun()
 
@@ -529,104 +592,194 @@ with col1:
         step=1,
     )
 
-    if st.button("Starten bis Ziel erreicht"):
-        if not opt.solve_step():
-            st.error("Start-Modell ist instabil! Bitte Lager/Kräfte prüfen.")
-        else:
-            base_max_u = max_displacement(struct)
-            abs_limit = base_max_u * allowed_softening_ratio
-            target_count = int(total_nodes * (target_mass_percent / 100))
-
-            status_container = st.empty()
-            progress_bar = st.progress(0)
-
-            start_active = current_active
-            nodes_to_remove_total = start_active - target_count
-            iteration_count = 0
-            max_safety_iterations = 500
-            stop_reason = "Iterationslimit erreicht"
-
-            while current_active > target_count and iteration_count < max_safety_iterations:
-                current_rate = 0.01 if iteration_count < 5 else 0.015
-                status_container.info(
-                    f"Iter: {iteration_count + 1} | Remove-Rate: {current_rate * 100:.1f}% | Limit-Check aktiv..."
-                )
-                time.sleep(0.01)
-
-                success, message = opt.optimize_step(
-                    remove_ratio=current_rate,
-                    max_displacement_limit=abs_limit,
-                )
-
-                if not success:
-                    stop_reason = message
-                    break
-
-                current_active = sum(1 for n in struct.nodes if n.active)
-                new_percent = (current_active / total_nodes) * 100
-                mass_info_placeholder.info(f"Aktuelle Masse: {new_percent:.1f}%")
-
-                removed_so_far = start_active - current_active
-                if nodes_to_remove_total > 0:
-                    progress_bar.progress(min(max(removed_so_far / nodes_to_remove_total, 0.0), 1.0))
-
-                fig = Visualizer.plot_structure(
-                    struct,
-                    show_deformation=show_deformation,
-                    scale_factor=scale,
-                    selected_node_id=selected_id,
-                    colorize_elements=fem_color_map,
-                    color_percentile=color_percentile,
-                    show_background_nodes=show_background_nodes,
-                    line_width=line_width,
-                    color_levels=color_levels,
-                    fixed_color_vmax=fixed_color_vmax,
-                    metric_mode=metric_mode,
-                    normalize_mode=normalize_mode,
-                    element_filter=element_filter,
-                )
-                plot_placeholder.pyplot(fig)
-                plt.close(fig)
-                iteration_count += 1
-
-            postprocess_msg = ""
-            if use_postprocess:
-                pp_stats = opt.beautify_topology(iterations=int(postprocess_strength))
-                current_active = sum(1 for n in struct.nodes if n.active)
-                new_percent = (current_active / total_nodes) * 100
-                mass_info_placeholder.info(f"Aktuelle Masse: {new_percent:.1f}%")
-                fig = Visualizer.plot_structure(
-                    struct,
-                    show_deformation=show_deformation,
-                    scale_factor=scale,
-                    selected_node_id=selected_id,
-                    colorize_elements=fem_color_map,
-                    color_percentile=color_percentile,
-                    show_background_nodes=show_background_nodes,
-                    line_width=line_width,
-                    color_levels=color_levels,
-                    fixed_color_vmax=fixed_color_vmax,
-                    metric_mode=metric_mode,
-                    normalize_mode=normalize_mode,
-                    element_filter=element_filter,
-                )
-                plot_placeholder.pyplot(fig)
-                plt.close(fig)
-                postprocess_msg = (
-                    f" Nachbearbeitung: +{pp_stats['activated']} / -{pp_stats['deactivated']} Knoten."
-                )
-
-            if stop_reason:
-                if "Limit" in stop_reason or "Zu weich" in stop_reason or "Keine weiteren" in stop_reason:
-                    st.success(f"Optimierung fertig: {stop_reason}{postprocess_msg}")
-                    st.info("Das ist das leichteste Design, das dein Steifigkeits-Limit noch einhält.")
-                else:
-                    st.error(f"Fehler: {stop_reason}")
+    if not st.session_state.opt_initialized:
+        if st.button("Start Optimierung", use_container_width=True):
+            if not opt.solve_step():
+                st.session_state.opt_status_type = "error"
+                st.session_state.opt_status_msg = "Start-Modell ist instabil! Bitte Lager/Kräfte prüfen."
             else:
-                st.success(f"Ziel-Masse erreicht! (Struktur ist noch steif genug){postprocess_msg}")
+                reset_optimizer_state()
+                st.session_state.opt_initialized = True
+                st.session_state.opt_running = True
+                st.session_state.opt_target_count = int(total_nodes * (target_mass_percent / 100))
+                st.session_state.opt_start_active = sum(1 for n in struct.nodes if n.active)
+                st.session_state.opt_abs_limit = max_displacement(struct) * allowed_softening_ratio
+                st.session_state.opt_status_type = "info"
+                st.session_state.opt_status_msg = "Optimierung läuft..."
+                st.session_state.opt_stop_reason = ""
+                st.session_state.opt_postprocess_done = False
+                push_opt_snapshot(struct)
+                st.rerun()
+    else:
+        total_steps = max(1, len(st.session_state.opt_history))
+        current_step = min(max(int(st.session_state.opt_view_index) + 1, 1), total_steps)
+        if not st.session_state.opt_running:
+            st.caption(f"Iteration: {current_step}/{total_steps}")
+
+        ctrl1, ctrl2, ctrl3 = st.columns([1.2, 1, 1])
+        with ctrl1:
+            play_label = "Pause" if st.session_state.opt_running else "Play"
+            if st.button(play_label, use_container_width=True):
+                st.session_state.opt_running = not st.session_state.opt_running
+                if st.session_state.opt_running:
+                    st.session_state.opt_postprocess_done = False
+                    st.session_state.opt_stop_reason = ""
+                st.session_state.opt_status_type = "info"
+                st.session_state.opt_status_msg = (
+                    "Optimierung läuft..." if st.session_state.opt_running else "Optimierung pausiert."
+                )
+                st.rerun()
+        with ctrl2:
+            back_disabled = st.session_state.opt_running or int(st.session_state.opt_view_index) <= 0
+            if st.button("‹", use_container_width=True, disabled=back_disabled):
+                if restore_opt_snapshot(int(st.session_state.opt_view_index) - 1):
+                    st.session_state.opt_status_type = "info"
+                    st.session_state.opt_status_msg = "Eine Iteration zurück."
+                    st.rerun()
+        with ctrl3:
+            forward_disabled = st.session_state.opt_running or int(st.session_state.opt_view_index) >= (len(st.session_state.opt_history) - 1)
+            if st.button("›", use_container_width=True, disabled=forward_disabled):
+                if restore_opt_snapshot(int(st.session_state.opt_view_index) + 1):
+                    st.session_state.opt_status_type = "info"
+                    st.session_state.opt_status_msg = "Eine Iteration vor."
+                    st.rerun()
+
+    status_container = st.empty()
+    progress_bar = st.progress(0.0)
+    live_active = sum(1 for n in struct.nodes if n.active)
+    live_percent = (live_active / total_nodes) * 100
+    mass_info_placeholder.info(f"Aktuelle Masse: {live_percent:.1f}%")
+    nodes_to_remove_total = max(int(st.session_state.opt_start_active) - int(st.session_state.opt_target_count), 0)
+    removed_so_far = max(int(st.session_state.opt_start_active) - live_active, 0)
+    if nodes_to_remove_total > 0:
+        progress_bar.progress(min(max(removed_so_far / nodes_to_remove_total, 0.0), 1.0))
+
+    if st.session_state.opt_initialized:
+        run_state = "Läuft" if st.session_state.opt_running else "Pausiert"
+        current_rate = 0.01 if int(st.session_state.opt_iteration) < 5 else 0.015
+        status_container.info(
+            f"Status: {run_state} | Iter: {int(st.session_state.opt_iteration)} | "
+            f"Remove-Rate: {current_rate * 100:.1f}%"
+        )
+
+    # Kontinuierliche Optimierung ohne Zwischen-Reruns:
+    # während des Loops nur Plot/Status updaten, UI-Widgets erst wieder nach Interaktion.
+    if st.session_state.opt_initialized and st.session_state.opt_running:
+        run_started = True
+        if int(st.session_state.opt_view_index) < len(st.session_state.opt_history) - 1:
+            restore_opt_snapshot(int(st.session_state.opt_view_index))
+            st.session_state.opt_history = st.session_state.opt_history[: int(st.session_state.opt_view_index) + 1]
+
+        stop_reason = ""
+        while st.session_state.opt_running:
+            live_active = sum(1 for n in struct.nodes if n.active)
+            if live_active <= int(st.session_state.opt_target_count):
+                st.session_state.opt_running = False
+                stop_reason = "Ziel-Masse erreicht."
+                break
+            if int(st.session_state.opt_iteration) >= 500:
+                st.session_state.opt_running = False
+                stop_reason = "Iterationslimit erreicht"
+                break
+
+            current_rate = 0.01 if int(st.session_state.opt_iteration) < 5 else 0.015
+            success, message = opt.optimize_step(
+                remove_ratio=current_rate,
+                max_displacement_limit=float(st.session_state.opt_abs_limit),
+            )
+            if not success:
+                st.session_state.opt_running = False
+                stop_reason = str(message)
+                break
+
+            push_opt_snapshot(struct)
+            # Live-Update pro Iteration (ohne erst auf den nächsten Rerun zu warten)
+            live_active = sum(1 for n in struct.nodes if n.active)
+            live_percent = (live_active / total_nodes) * 100
+            mass_info_placeholder.info(f"Aktuelle Masse: {live_percent:.1f}%")
+            nodes_to_remove_total = max(int(st.session_state.opt_start_active) - int(st.session_state.opt_target_count), 0)
+            removed_so_far = max(int(st.session_state.opt_start_active) - live_active, 0)
+            if nodes_to_remove_total > 0:
+                progress_bar.progress(min(max(removed_so_far / nodes_to_remove_total, 0.0), 1.0))
+
+            fig = Visualizer.plot_structure(
+                struct,
+                show_deformation=show_deformation,
+                scale_factor=scale,
+                selected_node_id=selected_id,
+                colorize_elements=fem_color_map,
+                color_percentile=color_percentile,
+                show_background_nodes=show_background_nodes,
+                line_width=line_width,
+                color_levels=color_levels,
+                fixed_color_vmax=fixed_color_vmax,
+                metric_mode=metric_mode,
+                normalize_mode=normalize_mode,
+                element_filter=element_filter,
+            )
+            plot_placeholder.pyplot(fig)
+            plt.close(fig)
+            time.sleep(0.01)
+
+        if (not st.session_state.opt_running) and use_postprocess and (not st.session_state.opt_postprocess_done):
+            pp_stats = opt.beautify_topology(iterations=int(postprocess_strength))
+            push_opt_snapshot(struct)
+            st.session_state.opt_postprocess_done = True
+            stop_reason = f"{stop_reason} Nachbearbeitung: +{pp_stats['activated']} / -{pp_stats['deactivated']} Knoten."
+            # Nachbearbeiteten Zustand sofort anzeigen.
+            live_active = sum(1 for n in struct.nodes if n.active)
+            live_percent = (live_active / total_nodes) * 100
+            mass_info_placeholder.info(f"Aktuelle Masse: {live_percent:.1f}%")
+            nodes_to_remove_total = max(int(st.session_state.opt_start_active) - int(st.session_state.opt_target_count), 0)
+            removed_so_far = max(int(st.session_state.opt_start_active) - live_active, 0)
+            if nodes_to_remove_total > 0:
+                progress_bar.progress(min(max(removed_so_far / nodes_to_remove_total, 0.0), 1.0))
+            fig = Visualizer.plot_structure(
+                struct,
+                show_deformation=show_deformation,
+                scale_factor=scale,
+                selected_node_id=selected_id,
+                colorize_elements=fem_color_map,
+                color_percentile=color_percentile,
+                show_background_nodes=show_background_nodes,
+                line_width=line_width,
+                color_levels=color_levels,
+                fixed_color_vmax=fixed_color_vmax,
+                metric_mode=metric_mode,
+                normalize_mode=normalize_mode,
+                element_filter=element_filter,
+            )
+            plot_placeholder.pyplot(fig)
+            plt.close(fig)
+
+        if not st.session_state.opt_running:
+            st.session_state.opt_stop_reason = stop_reason
+            if "Limit" in stop_reason or "Zu weich" in stop_reason or "Keine weiteren" in stop_reason:
+                st.session_state.opt_status_type = "success"
+                st.session_state.opt_status_msg = f"Optimierung fertig: {stop_reason}"
+            elif "Ziel-Masse erreicht" in stop_reason:
+                st.session_state.opt_status_type = "success"
+                st.session_state.opt_status_msg = f"Optimierung fertig: {stop_reason}"
+            elif stop_reason:
+                st.session_state.opt_status_type = "error"
+                st.session_state.opt_status_msg = f"Fehler: {stop_reason}"
+            st.session_state.opt_running = False
+            if run_started:
+                st.rerun()
 
     if st.button("Meldungen zurücksetzen"):
+        st.session_state.opt_status_msg = ""
+        st.session_state.opt_status_type = "info"
         st.rerun()
+
+    status_msg = str(st.session_state.opt_status_msg).strip()
+    if status_msg:
+        if st.session_state.opt_status_type == "success":
+            st.success(status_msg)
+        elif st.session_state.opt_status_type == "error":
+            st.error(status_msg)
+        else:
+            st.info(status_msg)
 
 final_percent = (sum(1 for n in struct.nodes if n.active) / total_nodes) * 100
 st.metric("Status", f"{sum(1 for n in struct.nodes if n.active)} / {total_nodes} Knoten aktiv ({final_percent:.1f}%)")
