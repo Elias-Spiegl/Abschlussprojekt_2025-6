@@ -40,10 +40,12 @@ def reset_optimizer_state() -> None:
     st.session_state.opt_target_count = 0
     st.session_state.opt_start_active = 0
     st.session_state.opt_abs_limit = 0.0
-    st.session_state.opt_postprocess_done = False
+    st.session_state.opt_finished = False
     st.session_state.opt_stop_reason = ""
     st.session_state.opt_status_type = "info"
     st.session_state.opt_status_msg = ""
+    st.session_state.smooth_history = []
+    st.session_state.smooth_index = -1
 
 
 def push_opt_snapshot(structure: Structure) -> None:
@@ -64,6 +66,24 @@ def restore_opt_snapshot(index: int) -> bool:
     st.session_state.structure = Structure.from_dict(history[index])
     st.session_state.opt_view_index = index
     return True
+
+
+def restore_smooth_snapshot(index: int) -> bool:
+    history = st.session_state.smooth_history
+    if index < 0 or index >= len(history):
+        return False
+    st.session_state.structure = Structure.from_dict(history[index])
+    st.session_state.smooth_index = index
+    return True
+
+
+def reset_visualization_state() -> None:
+    st.session_state.show_deformation = False
+    st.session_state.fem_colormap = False
+    st.session_state.deformation_display_percent = 100
+    st.session_state.element_focus_radio = "Alle"
+    st.session_state.line_width_slider = 0.8
+    st.session_state.fem_metric_mode = "Energie/Länge"
 
 
 def max_displacement(structure: Structure) -> float:
@@ -184,14 +204,30 @@ if "opt_start_active" not in st.session_state:
     st.session_state.opt_start_active = 0
 if "opt_abs_limit" not in st.session_state:
     st.session_state.opt_abs_limit = 0.0
-if "opt_postprocess_done" not in st.session_state:
-    st.session_state.opt_postprocess_done = False
+if "opt_finished" not in st.session_state:
+    st.session_state.opt_finished = False
 if "opt_stop_reason" not in st.session_state:
     st.session_state.opt_stop_reason = ""
 if "opt_status_type" not in st.session_state:
     st.session_state.opt_status_type = "info"
 if "opt_status_msg" not in st.session_state:
     st.session_state.opt_status_msg = ""
+if "smooth_history" not in st.session_state:
+    st.session_state.smooth_history = []
+if "smooth_index" not in st.session_state:
+    st.session_state.smooth_index = -1
+if "show_deformation" not in st.session_state:
+    st.session_state.show_deformation = False
+if "fem_colormap" not in st.session_state:
+    st.session_state.fem_colormap = False
+if "deformation_display_percent" not in st.session_state:
+    st.session_state.deformation_display_percent = 100
+if "element_focus_radio" not in st.session_state:
+    st.session_state.element_focus_radio = "Alle"
+if "line_width_slider" not in st.session_state:
+    st.session_state.line_width_slider = 0.8
+if "fem_metric_mode" not in st.session_state:
+    st.session_state.fem_metric_mode = "Energie/Länge"
 
 index = load_index()
 
@@ -233,6 +269,7 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
         st.session_state.selected_z = 0
         st.session_state.editor_node_id = None
         reset_optimizer_state()
+        reset_visualization_state()
         st.success("Modell erstellt.")
         st.rerun()
 
@@ -260,6 +297,7 @@ with st.sidebar.expander("1) Modellverwaltung", expanded=True):
                     st.session_state.selected_z = 0
                     st.session_state.editor_node_id = None
                     reset_optimizer_state()
+                    reset_visualization_state()
                     st.success("Modell geladen.")
                     st.rerun()
                 except Exception as e:
@@ -382,6 +420,31 @@ with st.sidebar.expander("3) Knoten, Kräfte, Lager", expanded=True):
             on_change=_on_support_select_change,
         )
 
+    delete_target_id = None
+    delete_target_kind = ""
+    if int(st.session_state.existing_load_id) >= 0:
+        delete_target_id = int(st.session_state.existing_load_id)
+        delete_target_kind = "Kraft"
+    elif int(st.session_state.existing_support_id) >= 0:
+        delete_target_id = int(st.session_state.existing_support_id)
+        delete_target_kind = "Lager"
+
+    if delete_target_id is not None:
+        dx = int(delete_target_id % struct.width)
+        dz = int(delete_target_id // struct.width)
+        delete_label = f"{delete_target_kind} (x={dx}, z={dz}) löschen"
+        if st.button(delete_label, use_container_width=True):
+            target_node = struct.nodes[delete_target_id]
+            if delete_target_kind == "Kraft":
+                target_node.force_x = 0.0
+                target_node.force_z = 0.0
+            else:
+                target_node.fixed_x = False
+                target_node.fixed_z = False
+            reset_optimizer_state()
+            st.success(f"{delete_target_kind} bei x={dx}, z={dz} gelöscht.")
+            st.rerun()
+
     st.session_state.selected_x = min(max(int(st.session_state.selected_x), 0), struct.width - 1)
     st.session_state.selected_z = min(max(int(st.session_state.selected_z), 0), struct.height - 1)
 
@@ -485,7 +548,7 @@ with col2:
     if not visualization_physics_ok:
         st.warning("Visualisierung: Modell aktuell instabil (Lager/Kräfte prüfen).")
 
-    show_deformation = st.checkbox("Verformung anzeigen", value=True, key="show_deformation")
+    show_deformation = st.checkbox("Verformung anzeigen", key="show_deformation")
     if show_deformation:
         deformation_display_percent = st.slider(
             "Verformungsdarstellung (%)", 0, 1000, 100, step=5,
@@ -497,9 +560,8 @@ with col2:
         )
     else:
         scale = 0.0
-        st.caption("Verformung ist ausgeblendet (undeformte Geometrie).")
 
-    fem_color_map = st.checkbox("FEM-Farbskala anzeigen", value=True, key="fem_colormap")
+    fem_color_map = st.checkbox("FEM-Farbskala anzeigen", key="fem_colormap")
     line_width = 0.8
     color_percentile = 95
     color_levels = 15
@@ -508,7 +570,7 @@ with col2:
     element_filter = "all"
     metric_mode = "energy_per_length"
     if fem_color_map:
-        c_vis1, c_vis2 = st.columns([1, 1])
+        c_vis1, c_vis2, c_vis3 = st.columns([1, 1, 1.2])
         with c_vis1:
             element_focus = st.radio(
                 "Elementfokus",
@@ -522,12 +584,22 @@ with col2:
                 "Linienstärke",
                 min_value=0.4,
                 max_value=2.0,
-                value=0.8,
                 step=0.1,
                 key="line_width_slider",
             )
+        with c_vis3:
+            st.selectbox(
+                "FEM-Größe",
+                options=["Energie/Länge", "Strain", "Displacement"],
+                key="fem_metric_mode",
+            )
         element_filter = {"Alle": "all", "H+V": "hv", "Diagonal": "diag"}[element_focus]
-        st.caption("Backend: Energie/Länge, pro Richtung normiert, 15 Farbstufen.")
+        metric_mode = {
+            "Energie/Länge": "energy_per_length",
+            "Strain": "strain",
+            "Displacement": "displacement",
+        }[st.session_state.fem_metric_mode]
+        st.caption("Backend: pro Richtung normiert, 15 Farbstufen.")
         show_background_nodes = False
     else:
         show_background_nodes = True
@@ -579,18 +651,6 @@ with col1:
         f"Zulässig bis +{max_stiffness_loss_percent}% Verformung gegenüber der Referenz "
         f"(entspricht Faktor {allowed_softening_ratio:.2f})."
     )
-    use_postprocess = st.checkbox(
-        "Nach Optimierung verschönern",
-        value=True,
-        help="Füllt kleine Löcher, glättet Ausreißer und verdickt lokal sehr dünne Stränge.",
-    )
-    postprocess_strength = st.slider(
-        "Nachbearbeitung Intensität",
-        min_value=1,
-        max_value=3,
-        value=2,
-        step=1,
-    )
 
     if not st.session_state.opt_initialized:
         if st.button("Start Optimierung", use_container_width=True):
@@ -601,13 +661,13 @@ with col1:
                 reset_optimizer_state()
                 st.session_state.opt_initialized = True
                 st.session_state.opt_running = True
+                st.session_state.opt_finished = False
                 st.session_state.opt_target_count = int(total_nodes * (target_mass_percent / 100))
                 st.session_state.opt_start_active = sum(1 for n in struct.nodes if n.active)
                 st.session_state.opt_abs_limit = max_displacement(struct) * allowed_softening_ratio
                 st.session_state.opt_status_type = "info"
                 st.session_state.opt_status_msg = "Optimierung läuft..."
                 st.session_state.opt_stop_reason = ""
-                st.session_state.opt_postprocess_done = False
                 push_opt_snapshot(struct)
                 st.rerun()
     else:
@@ -618,16 +678,27 @@ with col1:
 
         ctrl1, ctrl2, ctrl3 = st.columns([1.2, 1, 1])
         with ctrl1:
-            play_label = "Pause" if st.session_state.opt_running else "Play"
+            play_label = "Stop Optimization" if st.session_state.opt_running else "Run Optimization"
             if st.button(play_label, use_container_width=True):
-                st.session_state.opt_running = not st.session_state.opt_running
                 if st.session_state.opt_running:
-                    st.session_state.opt_postprocess_done = False
-                    st.session_state.opt_stop_reason = ""
-                st.session_state.opt_status_type = "info"
-                st.session_state.opt_status_msg = (
-                    "Optimierung läuft..." if st.session_state.opt_running else "Optimierung pausiert."
-                )
+                    st.session_state.opt_running = False
+                    st.session_state.opt_status_type = "info"
+                    st.session_state.opt_status_msg = "Optimierung pausiert."
+                else:
+                    if not opt.solve_step():
+                        st.session_state.opt_status_type = "error"
+                        st.session_state.opt_status_msg = "Modell ist instabil. Bitte Lager/Kräfte prüfen."
+                    else:
+                        # Aktuelle UI-Parameter beim erneuten Start immer neu übernehmen.
+                        st.session_state.opt_target_count = int(total_nodes * (target_mass_percent / 100))
+                        st.session_state.opt_abs_limit = max_displacement(struct) * allowed_softening_ratio
+                        st.session_state.opt_running = True
+                        st.session_state.opt_finished = False
+                        st.session_state.smooth_history = []
+                        st.session_state.smooth_index = -1
+                        st.session_state.opt_stop_reason = ""
+                        st.session_state.opt_status_type = "info"
+                        st.session_state.opt_status_msg = "Optimierung läuft..."
                 st.rerun()
         with ctrl2:
             back_disabled = st.session_state.opt_running or int(st.session_state.opt_view_index) <= 0
@@ -697,6 +768,11 @@ with col1:
             live_active = sum(1 for n in struct.nodes if n.active)
             live_percent = (live_active / total_nodes) * 100
             mass_info_placeholder.info(f"Aktuelle Masse: {live_percent:.1f}%")
+            current_rate = 0.01 if int(st.session_state.opt_iteration) < 5 else 0.015
+            status_container.info(
+                f"Status: Läuft | Iter: {int(st.session_state.opt_iteration)} | "
+                f"Remove-Rate: {current_rate * 100:.1f}%"
+            )
             nodes_to_remove_total = max(int(st.session_state.opt_start_active) - int(st.session_state.opt_target_count), 0)
             removed_so_far = max(int(st.session_state.opt_start_active) - live_active, 0)
             if nodes_to_remove_total > 0:
@@ -721,39 +797,11 @@ with col1:
             plt.close(fig)
             time.sleep(0.01)
 
-        if (not st.session_state.opt_running) and use_postprocess and (not st.session_state.opt_postprocess_done):
-            pp_stats = opt.beautify_topology(iterations=int(postprocess_strength))
-            push_opt_snapshot(struct)
-            st.session_state.opt_postprocess_done = True
-            stop_reason = f"{stop_reason} Nachbearbeitung: +{pp_stats['activated']} / -{pp_stats['deactivated']} Knoten."
-            # Nachbearbeiteten Zustand sofort anzeigen.
-            live_active = sum(1 for n in struct.nodes if n.active)
-            live_percent = (live_active / total_nodes) * 100
-            mass_info_placeholder.info(f"Aktuelle Masse: {live_percent:.1f}%")
-            nodes_to_remove_total = max(int(st.session_state.opt_start_active) - int(st.session_state.opt_target_count), 0)
-            removed_so_far = max(int(st.session_state.opt_start_active) - live_active, 0)
-            if nodes_to_remove_total > 0:
-                progress_bar.progress(min(max(removed_so_far / nodes_to_remove_total, 0.0), 1.0))
-            fig = Visualizer.plot_structure(
-                struct,
-                show_deformation=show_deformation,
-                scale_factor=scale,
-                selected_node_id=selected_id,
-                colorize_elements=fem_color_map,
-                color_percentile=color_percentile,
-                show_background_nodes=show_background_nodes,
-                line_width=line_width,
-                color_levels=color_levels,
-                fixed_color_vmax=fixed_color_vmax,
-                metric_mode=metric_mode,
-                normalize_mode=normalize_mode,
-                element_filter=element_filter,
-            )
-            plot_placeholder.pyplot(fig)
-            plt.close(fig)
-
         if not st.session_state.opt_running:
             st.session_state.opt_stop_reason = stop_reason
+            st.session_state.opt_finished = True
+            st.session_state.smooth_history = [struct.to_dict()]
+            st.session_state.smooth_index = 0
             if "Limit" in stop_reason or "Zu weich" in stop_reason or "Keine weiteren" in stop_reason:
                 st.session_state.opt_status_type = "success"
                 st.session_state.opt_status_msg = f"Optimierung fertig: {stop_reason}"
@@ -766,6 +814,43 @@ with col1:
             st.session_state.opt_running = False
             if run_started:
                 st.rerun()
+
+    if st.session_state.opt_initialized and st.session_state.opt_finished and (not st.session_state.opt_running):
+        st.markdown("**Smoothening Structure**")
+        smooth_strength = st.select_slider(
+            "Strength",
+            options=[1, 2, 3],
+            value=2,
+            key="smooth_strength_selector",
+        )
+
+        s_col1, s_col2, s_col3 = st.columns([1.4, 1, 1])
+        with s_col1:
+            if st.button("Apply Smoothening", use_container_width=True):
+                if int(st.session_state.smooth_index) < len(st.session_state.smooth_history) - 1:
+                    st.session_state.smooth_history = st.session_state.smooth_history[: int(st.session_state.smooth_index) + 1]
+                pp_stats = opt.beautify_topology(iterations=int(smooth_strength))
+                st.session_state.smooth_history.append(struct.to_dict())
+                st.session_state.smooth_index = len(st.session_state.smooth_history) - 1
+                st.session_state.opt_status_type = "success"
+                st.session_state.opt_status_msg = (
+                    f"Smoothening applied: +{pp_stats['activated']} / -{pp_stats['deactivated']} nodes."
+                )
+                st.rerun()
+        with s_col2:
+            can_undo = int(st.session_state.smooth_index) > 0
+            if st.button("Undo", use_container_width=True, disabled=not can_undo):
+                if restore_smooth_snapshot(int(st.session_state.smooth_index) - 1):
+                    st.session_state.opt_status_type = "info"
+                    st.session_state.opt_status_msg = "Smoothening undo."
+                    st.rerun()
+        with s_col3:
+            can_redo = int(st.session_state.smooth_index) < (len(st.session_state.smooth_history) - 1)
+            if st.button("Redo", use_container_width=True, disabled=not can_redo):
+                if restore_smooth_snapshot(int(st.session_state.smooth_index) + 1):
+                    st.session_state.opt_status_type = "info"
+                    st.session_state.opt_status_msg = "Smoothening redo."
+                    st.rerun()
 
     if st.button("Meldungen zurücksetzen"):
         st.session_state.opt_status_msg = ""
