@@ -47,3 +47,9 @@ Nach Erreichen der Zielmasse kann ein Glättungs-Algorithmus ("Nach Optimierung 
 ### 4. FEM-Visualisierung (Farbskalen)
 Wir haben eine "Plasma"-Farbskala integriert, die Elemente basierend auf ihrer Auslastung (axiale Dehnung, Kraft, elastische Energie oder Energie pro Länge) einfärbt. Über die UI kann die Linienstärke angepasst und der Fokus auf bestimmte Elementausrichtungen (z.B. nur Diagonalen oder nur Horizontal/Vertikal) gelegt werden. Dies hilft bei der Analyse des Kraftflusses.
 
+### 5. Auswertungs-Report (Diagramme)
+Nach einer abgeschlossenen Optimierung wird ein Report erstellt der zwei Liniendiagramme anzeigt. 
+Diese visualisieren den prozentualen Massenabbau sowie den Verlauf der maximalen Verformung über alle Iterationen. Diese Diagramme dienen der Analyse des Optimierungsverlaufs. So lassen sich beispielsweise plötzliche Verformungs-Spikes (Instabilitäten) direkt auf das Entfernen spezifischer Knotenpunkte zurückführen.
+
+### 6. Gif-Animation als Download
+Nach beendeter Optimierung stehet immer der Download eines GIFs bereit, welcher den Optimierungsverlauf in einer bestimmten Anzahl an Bildern visualisiert. Durch Drücken der Taste "GIF-Animation generieren" werden genau die in der UI verwendeten Visualisierungseinstellungen übernommen und zu einem GIF zusammengesetzt. Über die daruf folgende Schaltfläche kann die .gif-Datei dann heruntergeladen werden.
