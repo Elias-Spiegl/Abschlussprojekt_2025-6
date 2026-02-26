@@ -49,7 +49,11 @@ class Visualizer:
             abs_delta_l = abs(delta_l)
             abs_strain = abs_delta_l / length
 
-            if metric_mode == "strain":
+            if metric_mode == "displacement":
+                disp_i = float(np.hypot(elem.node_i.u_x, elem.node_i.u_z))
+                disp_j = float(np.hypot(elem.node_j.u_x, elem.node_j.u_z))
+                values.append(0.5 * (disp_i + disp_j))
+            elif metric_mode == "strain":
                 values.append(abs_strain)
             elif metric_mode == "force":
                 values.append(abs(elem.k * delta_l))
@@ -104,7 +108,11 @@ class Visualizer:
                 abs_delta_l = abs(delta_l)
                 abs_strain = abs_delta_l / length
 
-                if metric_mode == "strain":
+                if metric_mode == "displacement":
+                    disp_i = float(np.hypot(elem.node_i.u_x, elem.node_i.u_z))
+                    disp_j = float(np.hypot(elem.node_j.u_x, elem.node_j.u_z))
+                    value = 0.5 * (disp_i + disp_j)
+                elif metric_mode == "strain":
                     value = abs_strain
                 elif metric_mode == "force":
                     value = abs(elem.k * delta_l)
@@ -211,6 +219,7 @@ class Visualizer:
         if colorize_elements and sm is not None:
             cbar = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
             metric_label = {
+                "displacement": "Verschiebungsbetrag |u|",
                 "strain": "|axiale Dehnung|",
                 "force": "|axiale Kraft|",
                 "energy": "elastische Energie",
