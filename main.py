@@ -3,7 +3,17 @@ from pathlib import Path
 
 import streamlit as st
 
-st.set_page_config(page_title="Model Hub", layout="wide")
+st.set_page_config(page_title="Modell Übersicht", layout="wide")
+
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] {display: none !important;}
+    [data-testid="collapsedControl"] {display: none !important;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -40,20 +50,21 @@ def model_label(meta: dict) -> str:
     return f"#{model_id} - {name}"
 
 
-st.title("Model Hub")
-st.caption("Wähle ein bestehendes Modell oder öffne den Workspace für ein neues Modell.")
+nav1, nav2, nav3 = st.columns([1, 1, 1])
+with nav1:
+    st.button("Modell Übersicht", use_container_width=True, disabled=True)
+with nav2:
+    if st.button("Modell Erstellen", use_container_width=True):
+        st.switch_page("pages/1_Modell_Erstellen.py")
+with nav3:
+    if st.button("Modell Optimieren", use_container_width=True):
+        st.switch_page("pages/2_Modell_Optimierung.py")
+
+st.title("Modell Übersicht")
+st.caption("Wähle ein bestehendes Modell oder erstelle im Bereich Modell Erstellen ein neues.")
 
 index = load_index()
 sorted_models = sorted(index, key=lambda x: int(x.get("id", 0)))
-
-c_top1, c_top2 = st.columns([1, 1])
-with c_top1:
-    if st.button("Workspace öffnen", use_container_width=True):
-        st.switch_page("pages/2_Workspace.py")
-with c_top2:
-    if st.button("Neues Modell erstellen", use_container_width=True):
-        st.session_state.pop("startup_load_model_id", None)
-        st.switch_page("pages/1_Model_Create.py")
 
 st.markdown("**Vorhandene Modelle**")
 if not sorted_models:
@@ -113,7 +124,7 @@ else:
     act1, act2 = st.columns(2)
     with act1:
         if st.button(
-            "Ausgewähltes Modell im Workspace öffnen",
+            "Ausgewähltes Modell in Modell Optimieren öffnen",
             use_container_width=True,
             disabled=selected_model_id is None,
         ):
@@ -121,7 +132,7 @@ else:
                 st.error("Bitte zuerst ein Modell auswählen.")
             else:
                 st.session_state.startup_load_model_id = int(selected_model_id)
-                st.switch_page("pages/2_Workspace.py")
+                st.switch_page("pages/2_Modell_Optimierung.py")
     with act2:
         if st.button(
             "Ausgewähltes Modell löschen",
