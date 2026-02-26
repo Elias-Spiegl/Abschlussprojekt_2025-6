@@ -78,6 +78,7 @@ class Visualizer:
         metric_mode="energy",
         normalize_mode="global",
         element_filter="all",
+        show_colorbar=True,
     ):
         fig, ax = plt.subplots(figsize=(8, 5))
         
@@ -216,7 +217,7 @@ class Visualizer:
             scatter_size = 5 if colorize_elements else 10
             ax.scatter(active_nodes_x, active_nodes_z, c='gray', s=scatter_size, alpha=scatter_alpha)
 
-        if colorize_elements and sm is not None:
+        if colorize_elements and sm is not None and show_colorbar:
             cbar = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
             metric_label = {
                 "displacement": "Verschiebungsbetrag |u|",
