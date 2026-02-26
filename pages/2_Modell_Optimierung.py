@@ -3,6 +3,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
+from PIL import Image
 
 import matplotlib.pyplot as plt
 import streamlit as st
@@ -578,16 +579,16 @@ with panel_auto:
                 st.rerun()
 
         if st.session_state.opt_initialized and st.session_state.opt_finished and (not st.session_state.opt_running):
-            st.markdown("**Smoothening Structure**")
+            st.markdown("**Struktur Glätten**")
             smooth_strength = st.radio(
-                "Strength",
+                "Stärke",
                 options=[1, 2, 3],
                 horizontal=True,
                 key="smooth_strength_selector",
             )
             s_col1, s_col2, s_col3 = st.columns([1.4, 1, 1])
             with s_col1:
-                if st.button("Apply Smoothening", use_container_width=True):
+                if st.button("Glättung anwenden", use_container_width=True):
                     if int(st.session_state.smooth_index) < len(st.session_state.smooth_history) - 1:
                         st.session_state.smooth_history = st.session_state.smooth_history[: int(st.session_state.smooth_index) + 1]
                     pp_stats = opt.beautify_topology(iterations=int(smooth_strength))
@@ -595,22 +596,22 @@ with panel_auto:
                     st.session_state.smooth_index = len(st.session_state.smooth_history) - 1
                     st.session_state.opt_status_type = "success"
                     st.session_state.opt_status_msg = (
-                        f"Smoothening applied: +{pp_stats['activated']} / -{pp_stats['deactivated']} nodes."
+                        f"Glättung angewendet: +{pp_stats['activated']} / -{pp_stats['deactivated']} Knoten."
                     )
                     st.rerun()
             with s_col2:
                 can_undo = int(st.session_state.smooth_index) > 0
-                if st.button("Undo", use_container_width=True, disabled=not can_undo):
+                if st.button("Rückgängig", use_container_width=True, disabled=not can_undo):
                     if restore_smooth_snapshot(int(st.session_state.smooth_index) - 1):
                         st.session_state.opt_status_type = "info"
-                        st.session_state.opt_status_msg = "Smoothening undo."
+                        st.session_state.opt_status_msg = "Glättung rückgängig gemacht."
                         st.rerun()
             with s_col3:
                 can_redo = int(st.session_state.smooth_index) < (len(st.session_state.smooth_history) - 1)
-                if st.button("Redo", use_container_width=True, disabled=not can_redo):
+                if st.button("Wiederholen", use_container_width=True, disabled=not can_redo):
                     if restore_smooth_snapshot(int(st.session_state.smooth_index) + 1):
                         st.session_state.opt_status_type = "info"
-                        st.session_state.opt_status_msg = "Smoothening redo."
+                        st.session_state.opt_status_msg = "Glättung wiederholt."
                         st.rerun()
 
 with panel_vis:
@@ -969,3 +970,114 @@ final_percent = (sum(1 for n in struct.nodes if n.active) / total_nodes) * 100
 plot_status_placeholder.caption(
     f"Aktive Knoten: {sum(1 for n in struct.nodes if n.active)} / {total_nodes} ({final_percent:.1f}%)"
 )
+
+
+# Erweiterung: Report & Gif 
+# Prüfen, ob eine Historie existiert und nicht leer ist
+if "opt_history" in st.session_state and st.session_state.opt_history:
+    st.markdown("---")
+    st.subheader("Auswertung & Animation")
+    
+    # Datenaufbereitung für die Diagramme
+    mass_data = []
+    disp_data = []
+    
+    # Startknoten zählen für die Prozentrechnung
+    start_nodes = st.session_state.opt_history[0].get("nodes", [])  # Annahme: Alle Knoten sind zu Beginn aktiv
+    total_nodes_count = len(start_nodes)
+    
+    for state in st.session_state.opt_history:  # Jede Iteration durchgehen
+        nodes = state.get("nodes", [])
+        
+        # Masse berechnen (aktive Knoten)
+        active_count = sum(1 for n in nodes if n.get("active", True)) 
+        if total_nodes_count > 0:   
+            mass_data.append((active_count / total_nodes_count) * 100)  # Prozentuale Masse
+        else:
+            mass_data.append(0)     # falls Disvision durch Null, 0% annehmen
+        
+        # Max Verformung berechnen
+        u_max = 0.0
+        for n in nodes:
+            dist = (n.get("u_x", 0)**2 + n.get("u_z", 0)**2)**0.5
+            if dist > u_max:
+                u_max = dist
+        disp_data.append(u_max)
+        
+    # Liniendiagramme erstellen
+    col_chart1, col_chart2 = st.columns(2)
+    with col_chart1:
+        st.markdown("**Massenabbau über Iterationen (%)**")
+        st.line_chart(mass_data)
+        
+    with col_chart2:
+        st.markdown("**Max. Verformung über Iterationen**")
+        st.line_chart(disp_data)
+
+    # GIF-Animation generieren
+    st.markdown("**Animation exportieren**")
+    st.caption("Generiert ein .gif-Datei des Optimierungsverlaufs. Bei langen Optimierungen werden Zwischenschritte übersprungen, um die Dateigröße klein zu halten.")
+    
+    if st.button("GIF-Animation generieren", use_container_width=True):
+        with st.spinner("Generiere GIF (das kann einen Moment dauern)..."):
+            frames = []
+            history_len = len(st.session_state.opt_history)
+            
+            # Max. 35 Bilder für das GIF rendern, um Zeit zu sparen
+            step = max(1, history_len // 35) 
+            indices_to_render = list(range(0, history_len, step))
+            if indices_to_render[-1] != history_len - 1: 
+                indices_to_render.append(history_len - 1) # Immer das finale Bild mitnehmen
+                
+            for i in indices_to_render:
+                temp_struct = Structure.from_dict(st.session_state.opt_history[i])  # Struktur aus der Historie wiederherstellen
+                
+                # Visualizer aufrufen (aktuelle UI-Einstellungen)
+                fig = Visualizer.plot_structure(
+                    temp_struct,
+                    show_deformation=show_deformation,
+                    scale_factor=scale,
+                    selected_node_id=None, # nicht notwendig
+                    colorize_elements=fem_color_map,
+                    color_percentile=color_percentile,
+                    show_background_nodes=show_background_nodes,
+                    line_width=line_width,
+                    color_levels=color_levels,
+                    fixed_color_vmax=fixed_color_vmax,
+                    metric_mode=metric_mode,
+                    normalize_mode=normalize_mode,
+                    element_filter=element_filter,
+                )
+                
+                # Matplotlib Plot in Arbeitsspeicher speichern (als PNG)
+                buf = io.BytesIO()
+                fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor='white')
+                buf.seek(0)
+                
+                # Bild für das GIF sammeln
+                frames.append(Image.open(buf))
+                
+                # Speicher freigeben, sonst stürzt App ab
+                plt.close(fig) 
+                
+            # Frames zu GIF zusamnensetzen
+            if frames:
+                gif_buf = io.BytesIO()
+                frames[0].save(
+                    gif_buf,
+                    format="GIF",
+                    save_all=True,
+                    append_images=frames[1:],
+                    duration=200,  # 200 Millisekunden pro Bild
+                    loop=0         # 0 = unendlich oft wiederholen (Endlos-Loop)
+                )
+                
+                # Download-Button für GIF
+                st.success("GIF erfolgreich generiert!")
+                st.download_button(
+                    label="Animation (.gif) herunterladen",
+                    data=gif_buf.getvalue(),
+                    file_name="topologie_animation.gif",
+                    mime="image/gif",
+                    use_container_width=True
+                )
