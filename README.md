@@ -128,12 +128,11 @@ Zusätzlich zu den Mindestanforderungen wurden folgende Erweiterungen umgesetzt.
 
 ## UML (Mermaid)
 
-![UML-Klassendiagramm](/Users/eliasspiegl/Documents/MCI/Softwaredesign/Abschlussprojekt_2025-6/docs/UML_Klassendiagramm.png)
+![UML-Klassendiagramm](docs/UML_Klassendiagramm.png)
 
-Mermaid-Quelle: `docs/UML_Klassendiagramm.mmd`
 
 ## Quellen
-
+- Mermaid: `docs/UML_Klassendiagramm.mmd` https://mermaid.js.org
 - Streamlit: https://docs.streamlit.io/
 - NumPy: https://numpy.org/doc/
 - Matplotlib: https://matplotlib.org/stable/users/index.html
