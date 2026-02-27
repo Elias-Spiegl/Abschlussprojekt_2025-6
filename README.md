@@ -37,7 +37,7 @@ streamlit run main.py
 
 Danach ist die App lokal unter `http://localhost:XXXX` erreichbar.
 
-## Deployment
+## Streamlit-UI
 
 Die Anwendung ist über Streamlit deploybar.
 
