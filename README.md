@@ -35,7 +35,13 @@ pip install -r requirements.txt
 streamlit run main.py
 ```
 
-Danach ist die App lokal unter `http://localhost:8501` erreichbar.
+Danach ist die App lokal unter `http://localhost:XXXX` erreichbar.
+
+## Deployment
+
+Die Anwendung ist über Streamlit deploybar.
+
+`https://abschlussprojekt2025-6-k7fl53twaajdcsbpfjr7wj.streamlit.app`
 
 ### Streamlit-Konfiguration (`.streamlit/config.toml`)
 
@@ -98,13 +104,6 @@ Grund ist eine nachgelagerte Glättungsoperation, die dünne/instabile Bereiche 
 **Verformter Zustand (100% Verformung, Einfärbung = Verschiebung):**
 
 ![MBB-Verformung](docs/MBB-Balken_80x20_Verformung.png)
-
-## Deployment
-
-Die Anwendung ist über Streamlit deploybar.
-
-> Platzhalter-Link (später ersetzen):  
-`https://your-streamlit-deployment-url.streamlit.app`
 
 ## Erweiterungen im Projekt
 
