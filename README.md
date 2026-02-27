@@ -52,7 +52,7 @@ Danach ist die App lokal unter `http://localhost:8501` erreichbar.
   - Visualisierung und FEM-Farbskala
   - PNG/GIF/HTML-Report Export
 
-## Mindestanorderungen
+## Mindestanforderungen
 
 die Mindestanforderungen wurden alle erfüllt. darüberhinaus wurden einige Erweiterungen implementiert (siehe "Erweiterungen im Projekt").
 
@@ -103,7 +103,7 @@ Zusätzlich zu den Mindestanforderungen wurden folgende Erweiterungen umgesetzt.
 
 ### Optimierungslogik
 
-| Erweiterung | Mehrwert | Umsetzung (kurz) |
+| Erweiterung | Mehrwert | Umsetzung |
 |---|---|---|
 | Dynamische Entfernungsrate | Stabilerer Start, danach schnellere Konvergenz | Frühe Iterationen mit 1.0%, später 1.5% Materialentfernung |
 | Sensitivitätsfilter + Pfad-Penalty | Weniger isolierte Ausreißer, robustere Lastpfade | Roh-Sensitivitäten werden nachbarschaftsbasiert geglättet und dünne Pfade zusätzlich bestraft |
@@ -111,7 +111,7 @@ Zusätzlich zu den Mindestanforderungen wurden folgende Erweiterungen umgesetzt.
 
 ### Visualisierung & Bedienung
 
-| Erweiterung | Mehrwert | Umsetzung (kurz) |
+| Erweiterung | Mehrwert | Umsetzung |
 |---|---|---|
 | Erweiterte FEM-Farbvisualisierung | Mehr Analyse statt nur Geometrieansicht | Umschaltbar zwischen Dehnung, Verschiebung und Energie/Länge |
 | Elementfokus (Alle, H+V, Diagonal) | Lastabtrag je Elementfamilie besser beurteilbar | Filter in der Plot-Darstellung auf Elementtyp |
@@ -120,13 +120,13 @@ Zusätzlich zu den Mindestanforderungen wurden folgende Erweiterungen umgesetzt.
 
 ### Export & Nachvollziehbarkeit
 
-| Erweiterung | Mehrwert | Umsetzung (kurz) |
+| Erweiterung | Mehrwert | Umsetzung |
 |---|---|---|
 | HTML-Berichtsgenerator | Reproduzierbare Ergebnisdokumentation | Modellmetadaten, Kennzahlen und Verlaufsdiagramme in einem Report |
 | GIF on-demand | Geringe Laufzeitkosten im normalen Betrieb | Animation wird nur bei Klick erzeugt, nicht bei jedem Lauf |
 | Persistente Modellhistorie | Nachvollziehbare Entwicklungs- und Optimierungsschritte | Historie über Bearbeitung, Optimierung und Glättung wird gespeichert |
 
-## UML (Mermaid)
+## UML-Diagramm
 
 ![UML-Klassendiagramm](docs/UML_Klassendiagramm.png)
 
