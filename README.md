@@ -1,55 +1,154 @@
-# Softwaredesign Abschlussprojekt
+# 2D Topologieoptimierung (Softwaredesign Abschlussprojekt)
+
 **Autoren:** Nico Dörr, Elias Spiegl  
-**Semester:** 3 (2025 / 26) 
+**Semester:** 3 (2025/26)
 
-## Projektbeschreibung
+## Projektziel
 
-Dieses Projekt ist eine interaktive Web-Anwendung zur 2D-Topologieoptimierung, die mit Python und Streamlit entwickelt wurde. Die Software ermöglicht es Anwendern, einen zweidimensionalen Bauraum zu definieren, Randbedingungen (wie Fest- und Loslager) sowie externe Kräfte auf diskrete Massepunkte aufzubringen. 
+Dieses Projekt implementiert eine vereinfachte 2D-Topologieoptimierung in Python mit Streamlit-Web-UI.  
+Die Struktur wird als Knotengitter mit linearen Federelementen modelliert (horizontal, vertikal, diagonal).  
+Ziel der Optimierung: Material abbauen bei möglichst hoher Steifigkeit (geringer Verformung).
 
-Der zugrundeliegende Löser basiert auf einer vereinfachten Finite-Elemente-Methode (FEM). Die Struktur wird als ein Gitter aus Knoten modelliert, die durch elastische Federelemente (horizontal, vertikal und diagonal) verbunden sind. Das Optimierungsziel ist es, Material iterativ zu entfernen, während die maximale Steifigkeit erhalten bleibt und physikalische Singularitäten vermieden werden.
+## Technologie-Stack
 
+- Python (objektorientiert)
+- Streamlit (Web-UI)
+- NumPy (lineare Algebra)
+- Matplotlib (Visualisierung, PNG, GIF-Frames)
+- Altair (interaktive Modellbearbeitung im Erstellungsmodus)
 
-
-## Installation und Ausführung
+## Installation & Start
 
 ### Voraussetzungen
-Stelle sicher, dass Python (Version 3.10 oder neuer empfohlen) auf deinem System installiert ist.
 
-### 1. Abhängigkeiten installieren
-Klone das Repository und installiere die benötigten Bibliotheken aus der `requirements.txt`:
+- Python 3.10+ empfohlen
+
+### Setup
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Anwendung starten
-Führe das Hauptskript über Streamlit aus in dem du im Terminal folgenden Befehl eingibst:
+### App starten
+
 ```bash
 streamlit run main.py
 ```
 
-### Erklärung zur Ausführung: 
-Dieser Befehl startet einen lokalen Streamlit-Webserver. Daraufhin öffnet sich automatisch dein Standard-Webbrowser (standardmäßig unter der lokalen Adresse http://localhost:8501). In dieser grafischen Benutzeroberfläche (Web-UI) kannst du das Programm interaktiv bedienen. Die UI ist grob in Sidebar-Workflows (Modellverwaltung, Kräfte/Lager-Definition) und eine zentrale Visualisierungs- sowie Steuerungsansicht für den Optimierer unterteilt.
+Danach ist die App lokal unter `http://localhost:8501` erreichbar.
 
+### Streamlit-Konfiguration (`.streamlit/config.toml`)
 
+In diesem Projekt wird die Standard-Seitenleiste von Streamlit bewusst deaktiviert:
+
+- `showSidebarNavigation = false`
+
+Grund: Die Navigation zwischen den Seiten (`Modell Übersicht`, `Modell Erstellen / Bearbeiten`, `Modell Optimieren`) wird in der App selbst über eine eigene Top-Navigation umgesetzt.  
+Ohne diese Einstellung würde zusätzlich die Streamlit-Standardnavigation erscheinen und die UI doppelt wirken.
+
+## Seitenstruktur der App
+
+- **Modell Übersicht**
+  - Vorhandene Modelle mit Metadaten anzeigen
+  - Modell auswählen, löschen, in Optimierung öffnen
+- **Modell Erstellen / Bearbeiten**
+  - Neues Modell anlegen oder bestehendes Modell bearbeiten
+  - Knoten, Kräfte und Lager interaktiv im Plot setzen
+  - Undo/Redo im Editor
+- **Modell Optimieren**
+  - Optimierungsparameter setzen
+  - Lauf starten/stoppen
+  - Visualisierung und FEM-Farbskala
+  - PNG/GIF/HTML-Report Export
+
+## Mindestanforderungen
+
+die Mindestanforderungen wurden alle erfüllt. darüberhinaus wurden einige Erweiterungen implementiert (siehe "Erweiterungen im Projekt").
+
+## Validierung am MBB-Balken
+
+Die Implementierung wurde am MBB-Balken-Szenario getestet und mit dem automatisch generierten HTML-Bericht ausgewertet.
+
+**Setup & Randbedingungen (MBB-Balken 80x20):**
+
+- Bauraum: `80 x 20` (insgesamt `1600` Knoten)
+- Lastfall: `1` externe Kraft
+- Lagerung: `2` Lager (Loslager + Festlager)
+- Optimierungsziel: Ziel-Masse `50%`, max. Steifigkeitsverlust `70%`
+
+**Ergebnis laut Bericht:**
+
+- Status: `Fertig` nach `49` Iterationen
+- Stop-Grund: `Ziel-Masse erreicht`
+- Erste Zielerreichung im Verlauf: ca. Iteration `44` bei `49.8%` Masse
+- Endzustand: `862 / 1600` aktive Knoten (`53.9%`)
+- Maximale Verformung über den Verlauf: `33.738731`
+- Glättung nach Optimierung: `1` Schritt
+- Historie im Bericht: `95` Verlaufsschritte (inkl. Zwischenzustände)
+
+**Hinweis zur Zielmasse:**
+
+Die Optimierung erreicht die Zielmasse im Verlauf, die finale gespeicherte Masse liegt danach aber leicht darüber.  
+Grund ist eine nachgelagerte Glättungsoperation, die dünne/instabile Bereiche stabilisiert und dafür lokal wieder Material ergänzt.
+
+**Optimierung:**
+
+![MBB-Validierung](docs/MBB-Balken_80x20.gif)
+
+**Verformter Zustand (100% Verformung, Einfärbung = Verschiebung):**
+
+![MBB-Verformung](docs/MBB-Balken_80x20_Verformung.png)
+
+## Deployment
+
+Die Anwendung ist über Streamlit deploybar.
+
+> Platzhalter-Link (später ersetzen):  
+`https://your-streamlit-deployment-url.streamlit.app`
 
 ## Erweiterungen im Projekt
-Um die Qualität der generierten Topologien, die Recheneffizienz und die allgemeine User Experience zu verbessern, haben wir das Projekt um folgende Funktionen erweitert:
 
-### 1. Dynamische Entfernungsraten (Remove-Ratio)
-Der Algorithmus passt die Aggressivität, mit der Material entfernt wird, während der Laufzeit selbstständig an. In den ersten Iterationen werden vorsichtig nur 1% der Knoten entfernt, um Grundstrukturen aufzubauen. Später erhöht sich die Rate auf 1.5%, um Rechenzeit zu sparen und effizienter zur Ziel-Masse zu gelangen.
+Zusätzlich zu den Mindestanforderungen wurden folgende Erweiterungen umgesetzt.
 
-### 2. Sensitivitätsfilter & Struktur-Bestrafung
-Anstatt Knoten rein nach ihrer individuellen Energie zu entfernen, nutzt unser Optimierer einen Nachbarschafts-Filter. Die Energie eines Knotens wird mit der seiner Nachbarn geglättet ("Sensitivity Filter"). Zusätzlich bestraft der Algorithmus dünne "Zick-Zack-Linien" (Knoten mit nur wenigen Nachbarn) massiv. Dadurch wird die Bildung von stabilen, massiven Netzwerken (z.B. Dreiecksstrukturen) gefördert und nutzlose, instabile Fäden werden frühzeitig gelöscht.
+### Optimierungslogik
 
-### 3. Intelligentes Post-Processing ("Beautifier")
-Nach Erreichen der Zielmasse kann ein Glättungs-Algorithmus ("Nach Optimierung verschönern") ausgeführt werden. Dieser durchläuft die Topologie und schließt kleine Löcher, entfernt isolierte "Ausreißer" (Spitzen) und verdickt lokal stark beanspruchte Hotspots basierend auf der Dehnungsenergie. Dies führt zu realistischeren, glatteren und fertigungsgerechteren Strukturen.
+| Erweiterung | Mehrwert | Umsetzung |
+|---|---|---|
+| Dynamische Entfernungsrate | Stabilerer Start, danach schnellere Konvergenz | Frühe Iterationen mit 1.0%, später 1.5% Materialentfernung |
+| Sensitivitätsfilter + Pfad-Penalty | Weniger isolierte Ausreißer, robustere Lastpfade | Roh-Sensitivitäten werden nachbarschaftsbasiert geglättet und dünne Pfade zusätzlich bestraft |
+| Struktur-Glättung (Stärke 1/2/3) | Besser fertigungstaugliche Geometrie | Diskrete Nachbearbeitung auf dem Optimierungsergebnis, inklusive Undo/Redo |
 
-### 4. FEM-Visualisierung (Farbskalen)
-Wir haben eine "Plasma"-Farbskala integriert, die Elemente basierend auf ihrer Auslastung (axiale Dehnung, Kraft, elastische Energie oder Energie pro Länge) einfärbt. Über die UI kann die Linienstärke angepasst und der Fokus auf bestimmte Elementausrichtungen (z.B. nur Diagonalen oder nur Horizontal/Vertikal) gelegt werden. Dies hilft bei der Analyse des Kraftflusses.
+### Visualisierung & Bedienung
 
-### 5. Auswertungs-Report (Diagramme)
-Nach einer abgeschlossenen Optimierung wird ein Report erstellt der zwei Liniendiagramme anzeigt. 
-Diese visualisieren den prozentualen Massenabbau sowie den Verlauf der maximalen Verformung über alle Iterationen. Diese Diagramme dienen der Analyse des Optimierungsverlaufs. So lassen sich beispielsweise plötzliche Verformungs-Spikes (Instabilitäten) direkt auf das Entfernen spezifischer Knotenpunkte zurückführen.
+| Erweiterung | Mehrwert | Umsetzung |
+|---|---|---|
+| Erweiterte FEM-Farbvisualisierung | Mehr Analyse statt nur Geometrieansicht | Umschaltbar zwischen Dehnung, Verschiebung und Energie/Länge |
+| Elementfokus (Alle, H+V, Diagonal) | Lastabtrag je Elementfamilie besser beurteilbar | Filter in der Plot-Darstellung auf Elementtyp |
+| Interaktiver Modell-Editor | Schnelles Definieren und Ändern von Modellen | Knoten, Kräfte und Lager direkt über den Plot setzen/bearbeiten |
+| Live-Optimierungsstatus | Transparentes Laufverhalten | Laufende Anzeige von Status, Iteration, Masse und Stop-Grund |
 
-### 6. Gif-Animation als Download
-Nach beendeter Optimierung stehet immer der Download eines GIFs bereit, welcher den Optimierungsverlauf in einer bestimmten Anzahl an Bildern visualisiert. Durch Drücken der Taste "GIF-Animation generieren" werden genau die in der UI verwendeten Visualisierungseinstellungen übernommen und zu einem GIF zusammengesetzt. Über die daruf folgende Schaltfläche kann die .gif-Datei dann heruntergeladen werden.
+### Export & Nachvollziehbarkeit
+
+| Erweiterung | Mehrwert | Umsetzung |
+|---|---|---|
+| HTML-Berichtsgenerator | Reproduzierbare Ergebnisdokumentation | Modellmetadaten, Kennzahlen und Verlaufsdiagramme in einem Report |
+| GIF on-demand | Geringe Laufzeitkosten im normalen Betrieb | Animation wird nur bei Klick erzeugt, nicht bei jedem Lauf |
+| Persistente Modellhistorie | Nachvollziehbare Entwicklungs- und Optimierungsschritte | Historie über Bearbeitung, Optimierung und Glättung wird gespeichert |
+
+## UML-Diagramm
+
+![UML-Klassendiagramm](docs/UML_Klassendiagramm.png)
+
+
+## Quellen
+- Mermaid: `docs/UML_Klassendiagramm.mmd` https://mermaid.js.org
+- Streamlit: https://docs.streamlit.io/
+- NumPy: https://numpy.org/doc/
+- Matplotlib: https://matplotlib.org/stable/users/index.html
+- Altair: https://altair-viz.github.io/
+- OpenAI LLM-Unterstützung (UI-Ideen, Refactoring-Hilfe, Textarbeit)
+
+## Hinweis zur KI-Unterstützung
+
+Bei der UI-Ausarbeitung wurden KI-gestützte Vorschläge als Unterstützung genutzt (insbesondere für Layout-Iterationen mit Streamlit).  
+Architektur, fachliche Entscheidungen, Implementierung und finale Integration wurden projektseitig umgesetzt und geprüft.

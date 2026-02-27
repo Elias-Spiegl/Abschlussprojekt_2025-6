@@ -4,8 +4,12 @@ from pathlib import Path
 
 import streamlit as st
 
+# Startseite konfigurieren (das ist unsere Modell-Uebersicht).
 st.set_page_config(page_title="Modell Übersicht", layout="wide")
 
+# Kleines CSS fuer ein einheitliches UI:
+# - Sidebar komplett aus
+# - Buttons optisch gleich
 st.markdown(
     """
     <style>
@@ -41,20 +45,30 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+# Datenhaltung:
+# - model_index.json: Liste mit Meta-Daten (id, name, zeitstempel, groesse)
+# - states/model_X.json: eigentlicher Modellzustand
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 STATE_DIR = DATA_DIR / "states"
 INDEX_FILE = DATA_DIR / "model_index.json"
+
+# Falls Ordner noch nicht da ist, direkt erzeugen.
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def format_ts(value: str | None) -> str:
+    # Zeitstring fuer Anzeige vorbereiten.
     if not value:
         return "-"
     return str(value).replace("T", " ")
 
 
 def load_index() -> list[dict]:
+    # Modell-Index laden (enthält Meta-Daten aller gespeicherten Modelle).
+    # Wenn Datei kaputt oder leer ist, lieber sauber mit [] starten statt Crash.
     if INDEX_FILE.exists():
         raw = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
         if isinstance(raw, list):
@@ -63,14 +77,22 @@ def load_index() -> list[dict]:
 
 
 def save_index(index: list[dict]) -> None:
+    # Index wieder als JSON speichern.
+    # Diese Funktion ist unsere zentrale Schreibstelle für Meta-Daten.
     INDEX_FILE.write_text(json.dumps(index, indent=2), encoding="utf-8")
 
 
 def now_iso() -> str:
+    # Einheitliches Datumsformat in der App.
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def make_unique_model_name(index: list[dict], requested_name: str, current_model_id: int | None = None) -> str:
+    # Verhindert doppelte Modellnamen (z.B. test -> test_1 -> test_2 ...)
+
+    # Wir vergleichen case-insensitive, damit "Test" und "test" nicht doppelt durchgehen.
+    # current_model_id ist wichtig beim Umbenennen:
+    # Das eigene Modell darf den bisherigen Namen natuerlich behalten.
     base = (requested_name or "").strip()
     if not base:
         return ""
@@ -87,6 +109,7 @@ def make_unique_model_name(index: list[dict], requested_name: str, current_model
     if base.casefold() not in taken:
         return base
 
+    # Falls Name schon vergeben ist, solange hochzaehlen bis ein freier Kandidat da ist.
     i = 1
     while True:
         candidate = f"{base}_{i}"
@@ -96,16 +119,21 @@ def make_unique_model_name(index: list[dict], requested_name: str, current_model
 
 
 def model_path(model_id: int) -> Path:
+    # Dateiname für den Zustand eines konkreten Models.
     return STATE_DIR / f"model_{int(model_id)}.json"
 
 
 def model_label(meta: dict) -> str:
+    # Lesbares Label fuer UI-Listen.
     model_id = int(meta.get("id", 0))
     name = (meta.get("name") or "").strip() or "(ohne Namen)"
     return f"#{model_id} - {name}"
 
 
 def rename_model(index: list[dict], model_id: int, new_name: str) -> tuple[list[dict], str]:
+    # Modellname im Index + in der eigentlichen JSON-Datei aktualisieren.
+    # Hintergrund: Der Name steht bei uns doppelt (in model_index und im State-File).
+    # Beides muss synchron sein, sonst sieht man je nach Seite unterschiedliche Namen.
     final_name = make_unique_model_name(index, new_name, current_model_id=model_id)
     updated_at = now_iso()
 
@@ -128,6 +156,7 @@ def rename_model(index: list[dict], model_id: int, new_name: str) -> tuple[list[
     return new_index, final_name
 
 
+# Navigation oben (statt Streamlit-Sidebar).
 nav1, nav2, nav3 = st.columns([1, 1, 1])
 with nav1:
     st.button("Modell Übersicht", use_container_width=True, disabled=True, type="primary")
@@ -144,6 +173,7 @@ st.caption("Wähle ein bestehendes Modell oder erstelle/bearbeite ein Modell im 
 index = load_index()
 sorted_models = sorted(index, key=lambda x: int(x.get("id", 0)))
 
+# Hauptbereich: vorhandene Modelle als Tabelle mit Auswahl-Checkbox.
 st.markdown("**Vorhandene Modelle**")
 if not sorted_models:
     st.info("Noch keine Modelle vorhanden.")
@@ -161,6 +191,11 @@ else:
     if "home_name_edit_value" not in st.session_state:
         st.session_state.home_name_edit_value = ""
 
+    # Checkbox-Zustand bei jedem Rerun sauber auf genau ein ausgewaehltes Modell synchronisieren.
+    # Streamlit rendert die Seite bei jeder Interaktion neu. Ohne diese Sync-Logik
+    # kann es passieren, dass visuell mehrere Haken stehen, obwohl intern nur ein Modell
+    # aktiv sein soll.
+
     if st.session_state.home_selection_dirty:
         for mid in model_ids:
             st.session_state[f"home_pick_{mid}"] = (mid == st.session_state.home_selected_model_id)
@@ -173,6 +208,10 @@ else:
         st.session_state.home_name_edit_value = (selected_meta.get("name") or "") if selected_meta else ""
 
     def _on_pick_model(mid: int) -> None:
+        # Callback fuer Checkbox:
+        # - Klick auf Checkbox setzt/entfernt das aktive Modell
+        # - danach markieren wir den Zustand als "dirty", damit beim naechsten
+        #   Rerun alle Checkboxen wieder konsistent (nur 0 oder 1 aktiv) sind.
         key = f"home_pick_{mid}"
         picked = bool(st.session_state.get(key, False))
         if picked:
@@ -210,6 +249,8 @@ else:
 
     selected_model_id = st.session_state.home_selected_model_id
 
+    # Aktionen fuer das ausgewaehlte Modell: oeffnen oder loeschen.
+    # Beide Buttons sind gesperrt, solange nichts ausgewaehlt wurde.
     act1, act2 = st.columns(2)
     with act1:
         if st.button(
@@ -232,11 +273,13 @@ else:
                 st.error("Bitte zuerst ein Modell auswählen.")
             else:
                 try:
+                    # Modell-Datei und Index-Eintrag entfernen.
                     model_path(int(selected_model_id)).unlink(missing_ok=True)
                     index = [m for m in index if int(m.get("id", -1)) != int(selected_model_id)]
                     save_index(index)
                     st.session_state.home_selected_model_id = None
                     st.success("Modell gelöscht.")
+                    # Direkt neu rendern, damit die geloeschte Zeile sofort aus der Tabelle verschwindet.
                     st.rerun()
                 except Exception as e:
                     st.error(f"Löschen fehlgeschlagen: {e}")

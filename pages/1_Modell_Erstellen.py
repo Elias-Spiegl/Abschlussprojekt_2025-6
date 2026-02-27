@@ -48,14 +48,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 STATE_DIR = DATA_DIR / "states"
 INDEX_FILE = DATA_DIR / "model_index.json"
+# Datenablage:
+# - model_index.json enthält die Modell-Metadaten
+# - states/model_X.json enthält den echten Modellzustand
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def now_iso() -> str:
+    # Einheitliches Zeitformat für alle Seiten.
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def load_index() -> list[dict]:
+    # Metadaten-Liste laden; bei Problemen lieber mit leerer Liste starten.
     if INDEX_FILE.exists():
         raw = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
         if isinstance(raw, list):
@@ -64,20 +69,53 @@ def load_index() -> list[dict]:
 
 
 def save_index(index: list[dict]) -> None:
+    # Zentrale Schreibfunktion für model_index.json.
     INDEX_FILE.write_text(json.dumps(index, indent=2), encoding="utf-8")
 
 
 def next_model_id(index: list[dict]) -> int:
+    # Neue ID immer fortlaufend erzeugen.
     if not index:
         return 1
     return max(int(item["id"]) for item in index) + 1
 
 
 def model_path(model_id: int) -> Path:
+    # Dateipfad eines einzelnen Modells.
     return STATE_DIR / f"model_{int(model_id)}.json"
 
 
+def _existing_history_timeline(model_id: int) -> list[dict]:
+    # Bereits gespeicherte Verlaufshistorie aus Datei holen (falls vorhanden).
+    path = model_path(model_id)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            history = payload.get("history", {})
+            timeline = history.get("timeline", []) if isinstance(history, dict) else []
+            if isinstance(timeline, list):
+                return timeline
+    except Exception:
+        pass
+    return []
+
+
+def snapshots_equal(a: dict, b: dict) -> bool:
+    # Zwei Zustände robust vergleichen (geordnetes JSON statt direktem Dict-Vergleich).
+    try:
+        return json.dumps(a, sort_keys=True, separators=(",", ":")) == json.dumps(
+            b, sort_keys=True, separators=(",", ":")
+        )
+    except Exception:
+        return False
+
+
 def make_unique_model_name(index: list[dict], requested_name: str, current_model_id: int | None = None) -> str:
+    # Doppelte Namen verhindern:
+    # Beispiel: "Test" -> "Test_1" -> "Test_2" ...
+    # Beim Bearbeiten wird das aktuelle Modell selbst aus der Prüfung ausgeschlossen.
     base = (requested_name or "").strip()
     if not base:
         return ""
@@ -99,7 +137,17 @@ def make_unique_model_name(index: list[dict], requested_name: str, current_model
         i += 1
 
 
-def save_model_snapshot(struct: Structure, model_id: int, name: str, created_at: str) -> dict:
+def save_model_snapshot(
+    struct: Structure,
+    model_id: int,
+    name: str,
+    created_at: str,
+    history_timeline: list[dict] | None = None,
+) -> dict:
+    # Speichert einen kompletten Stand:
+    # - Metadata (Name, Zeit, Größe)
+    # - Structure-Daten
+    # - Verlaufstimeline
     metadata = {
         "id": int(model_id),
         "name": (name or "").strip(),
@@ -108,16 +156,27 @@ def save_model_snapshot(struct: Structure, model_id: int, name: str, created_at:
         "width": int(struct.width),
         "height": int(struct.height),
     }
-    payload = {"metadata": metadata, "structure": struct.to_dict()}
+    timeline = history_timeline if history_timeline is not None else _existing_history_timeline(int(model_id))
+    payload = {
+        "metadata": metadata,
+        "structure": struct.to_dict(),
+        "history": {"timeline": timeline},
+    }
     model_path(model_id).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return metadata
 
 
-def load_model_snapshot(model_id: int) -> tuple[Structure, dict]:
+def load_model_snapshot(model_id: int) -> tuple[Structure, dict, list[dict]]:
+    # Lädt ein Modell im aktuellen Format.
+    # Fallback ist drin, damit auch alte reine Structure-Dateien weiter funktionieren.
     payload = json.loads(model_path(model_id).read_text(encoding="utf-8"))
     if "structure" in payload and "metadata" in payload:
         struct = Structure.from_dict(payload["structure"])
         metadata = payload["metadata"]
+        history = payload.get("history", {})
+        timeline = history.get("timeline", []) if isinstance(history, dict) else []
+        if not isinstance(timeline, list):
+            timeline = []
     else:
         struct = Structure.from_dict(payload)
         metadata = {
@@ -128,7 +187,8 @@ def load_model_snapshot(model_id: int) -> tuple[Structure, dict]:
             "width": int(struct.width),
             "height": int(struct.height),
         }
-    return struct, metadata
+        timeline = []
+    return struct, metadata, timeline
 
 
 def _build_default_structure(width: int, height: int) -> Structure:
@@ -150,6 +210,7 @@ def _build_default_structure(width: int, height: int) -> Structure:
 
 
 def _node_status(node) -> str:
+    # Vereinfachter Knotenzustand für die Plot-Farbe.
     if not node.active:
         return "Inaktiv"
     if node.fixed_x and node.fixed_z:
@@ -162,7 +223,8 @@ def _node_status(node) -> str:
 
 
 def _selection_node_ids(event, fallback_ids: list[int]) -> list[int]:
-    # Robust gegen unterschiedliche Event-Formate in Streamlit-Versionen.
+    # Streamlit liefert je nach Version leicht unterschiedliche Selection-Formate.
+    # Diese Funktion sammelt daraus immer eine saubere Liste von node_id-Werten.
     sel_ids: list[int] = []
 
     def _to_int(value):
@@ -231,12 +293,14 @@ def _selection_node_ids(event, fallback_ids: list[int]) -> list[int]:
 
     if sel_ids:
         return sorted(set(sel_ids))
-    # Leere/uneindeutige Selection-Events nicht als "Auswahl löschen" interpretieren.
-    # Auswahl wird explizit über "Auswahl aufheben" gelöscht.
+    # Leere/uneindeutige Events nicht als "Auswahl löschen" deuten.
+    # Löschen passiert bewusst nur über den Button "Auswahl aufheben".
     return fallback_ids
 
 
 def _set_support(node, support_mode: str) -> None:
+    # Setzt Lagerzustand in unserem vereinfachten Modell:
+    # Loslager = nur Z fix, Festlager = X und Z fix.
     if support_mode == "Loslager":
         node.fixed_x = False
         node.fixed_z = True
@@ -249,11 +313,14 @@ def _set_support(node, support_mode: str) -> None:
 
 
 def _history_reset(struct: Structure) -> None:
+    # Undo/Redo-Historie neu starten (nur aktueller Zustand).
     st.session_state.create_history = [struct.to_dict()]
     st.session_state.create_history_index = 0
 
 
 def _history_push(struct: Structure) -> None:
+    # Neuen Bearbeitungsschritt an Undo/Redo anhängen.
+    # Wenn man nach Undo weiterarbeitet, wird der "Redo-Zweig" abgeschnitten.
     hist = list(st.session_state.create_history)
     idx = int(st.session_state.create_history_index)
     if idx < len(hist) - 1:
@@ -264,6 +331,7 @@ def _history_push(struct: Structure) -> None:
 
 
 def _history_restore(index: int) -> bool:
+    # Zustand aus der Undo/Redo-Historie zurückholen.
     hist = st.session_state.create_history
     if index < 0 or index >= len(hist):
         return False
@@ -272,6 +340,8 @@ def _history_restore(index: int) -> bool:
     return True
 
 
+# Session-State Defaults für die ganze Seite.
+# So bleibt der Zustand zwischen Streamlit-Reruns stabil.
 if "create_draft_struct" not in st.session_state:
     st.session_state.create_draft_struct = None
 if "create_selected_ids" not in st.session_state:
@@ -306,6 +376,8 @@ if "create_edit_model_id" not in st.session_state:
     st.session_state.create_edit_model_id = None
 if "create_edit_model_created_at" not in st.session_state:
     st.session_state.create_edit_model_created_at = None
+if "create_persisted_history" not in st.session_state:
+    st.session_state.create_persisted_history = []
 if "create_mode" not in st.session_state:
     st.session_state.create_mode = None
 
@@ -324,6 +396,7 @@ st.caption("Wähle zuerst einen Modus.")
 index = load_index()
 sorted_models = sorted(index, key=lambda x: int(x.get("id", 0)))
 
+# Startmodus: Erst auswählen, ob neues Modell oder Bearbeiten.
 if st.session_state.create_mode is None:
     m1, m2 = st.columns(2)
     with m1:
@@ -336,6 +409,7 @@ if st.session_state.create_mode is None:
             st.session_state.create_width_input = 80
             st.session_state.create_height_input = 20
             st.session_state.create_draft_struct = _build_default_structure(80, 20)
+            st.session_state.create_persisted_history = [st.session_state.create_draft_struct.to_dict()]
             st.session_state.create_selected_ids = []
             st.session_state.create_editor_action = ""
             st.session_state.create_prev_selection_sig = ""
@@ -347,6 +421,7 @@ if st.session_state.create_mode is None:
             st.session_state.create_mode = "edit"
             st.session_state.create_edit_model_id = None
             st.session_state.create_edit_model_created_at = None
+            st.session_state.create_persisted_history = []
             st.session_state.create_selected_ids = []
             st.session_state.create_editor_action = ""
             st.session_state.create_prev_selection_sig = ""
@@ -354,16 +429,19 @@ if st.session_state.create_mode is None:
             st.rerun()
     st.stop()
 
+# Zurück zur Modusauswahl (setzt Seitenzustand sauber zurück).
 back_cols = st.columns([1.2, 3.8])
 with back_cols[0]:
     if st.button("Zur Modusauswahl", use_container_width=True):
         st.session_state.create_mode = None
+        st.session_state.create_persisted_history = []
         st.session_state.create_selected_ids = []
         st.session_state.create_editor_action = ""
         st.session_state.create_prev_selection_sig = ""
         st.session_state.create_chart_key_version += 1
         st.rerun()
 
+# Im Bearbeiten-Modus zuerst ein vorhandenes Modell auswählen und laden.
 if st.session_state.create_mode == "edit":
     with st.container(border=True):
         load_col1, load_col2 = st.columns([3, 1])
@@ -383,7 +461,7 @@ if st.session_state.create_mode == "edit":
             if st.button("Modell laden", use_container_width=True, disabled=not bool(load_options)):
                 try:
                     load_id = int(load_options[selected_load_label])
-                    loaded_struct, loaded_meta = load_model_snapshot(load_id)
+                    loaded_struct, loaded_meta, loaded_timeline = load_model_snapshot(load_id)
                     st.session_state.create_draft_struct = loaded_struct
                     st.session_state.create_last_dims = (int(loaded_struct.width), int(loaded_struct.height))
                     st.session_state.create_width_input = int(loaded_struct.width)
@@ -391,6 +469,9 @@ if st.session_state.create_mode == "edit":
                     st.session_state.create_model_name = loaded_meta.get("name", "") or ""
                     st.session_state.create_edit_model_id = int(loaded_meta.get("id", load_id))
                     st.session_state.create_edit_model_created_at = loaded_meta.get("created_at", now_iso())
+                    st.session_state.create_persisted_history = (
+                        list(loaded_timeline) if loaded_timeline else [loaded_struct.to_dict()]
+                    )
                     st.session_state.create_selected_ids = []
                     st.session_state.create_editor_action = ""
                     st.session_state.create_prev_selection_sig = ""
@@ -401,10 +482,12 @@ if st.session_state.create_mode == "edit":
                 except Exception as e:
                     st.error(f"Laden fehlgeschlagen: {e}")
 
+# Ohne geladenes Modell kann im Edit-Modus nicht weitergemacht werden.
 if st.session_state.create_mode == "edit" and st.session_state.create_edit_model_id is None:
     st.info("Bitte zuerst ein Modell laden.")
     st.stop()
 
+# Name + Speichern/Erstellen-Button.
 c_name, c_create = st.columns([2, 1])
 with c_name:
     st.text_input("Modellname", key="create_model_name")
@@ -415,6 +498,7 @@ with c_create:
         use_container_width=True,
     )
 
+# Geometrie-Eingabe (Breite/Höhe), Übernahme erst über "Größe anwenden".
 c_top1, c_top2 = st.columns([1, 1])
 with c_top1:
     st.slider("Breite (Knoten)", 5, 200, key="create_width_input")
@@ -425,6 +509,7 @@ if st.button("Größe anwenden", use_container_width=True):
     new_width = int(st.session_state.create_width_input)
     new_height = int(st.session_state.create_height_input)
     if (new_width, new_height) != tuple(st.session_state.create_last_dims):
+        # Bei Größenänderung starten wir ein neues Rohmodell mit Standard-Randbedingungen.
         st.session_state.create_draft_struct = _build_default_structure(new_width, new_height)
         st.session_state.create_last_dims = (new_width, new_height)
         st.session_state.create_selected_ids = []
@@ -440,16 +525,21 @@ height = int(st.session_state.create_last_dims[1])
 if st.session_state.create_draft_struct is None:
     st.session_state.create_draft_struct = _build_default_structure(width, height)
     st.session_state.create_selected_ids = []
+    st.session_state.create_persisted_history = [st.session_state.create_draft_struct.to_dict()]
     _history_reset(st.session_state.create_draft_struct)
 
 if not st.session_state.create_history:
     _history_reset(st.session_state.create_draft_struct)
 
 draft: Structure = st.session_state.create_draft_struct
+if not st.session_state.create_persisted_history:
+    st.session_state.create_persisted_history = [draft.to_dict()]
 
+# Links Editor-Aktionen, rechts interaktiver Plot.
 left, right = st.columns([1.15, 2.15])
 
 with right:
+    # Datenliste für Altair-Plot aufbauen.
     plot_data = []
     for n in draft.nodes:
         plot_data.append(
@@ -463,11 +553,13 @@ with right:
             }
         )
 
+    # Feste Farben für gut lesbare Zustände im Erstellen/Bearbeiten-Plot.
     color_scale = alt.Scale(
         domain=["Inaktiv", "Aktiv", "Kraft", "Loslager", "Festlager"],
         range=["#F0F0F8", "#0033FF", "#00A63E", "#FF8A00", "#FF0033"],
     )
 
+    # Klick-Auswahl direkt im Plot (Mehrfachauswahl per wiederholtem Klick).
     node_select = alt.selection_point(
         name="knoten",
         fields=["node_id"],
@@ -476,6 +568,7 @@ with right:
         on="click",
     )
 
+    # Rechteckiges Plot-Seitenverhältnis passend zu Breite/Höhe des Modells.
     chart_width = 900
     chart_height = max(220, min(700, int(chart_width * (height / max(width, 1)))))
 
@@ -486,6 +579,7 @@ with right:
         empty=False,
     )
 
+    # Interaktiver Knoten-Plot mit schwarzem Auswahlring.
     chart = (
         alt.Chart(alt.Data(values=plot_data))
         .mark_circle(size=78, strokeWidth=3.0)
@@ -515,6 +609,7 @@ with right:
         selection_mode=["knoten"],
     )
 
+    # Auswahl aus dem Event robust in Session-State übernehmen.
     st.session_state.create_selected_ids = _selection_node_ids(event, st.session_state.create_selected_ids)
 
     force_count = sum(1 for n in draft.nodes if n.force_x != 0 or n.force_z != 0)
@@ -529,9 +624,12 @@ with right:
     i4.metric("Festlager", festlager_count)
 
 with left:
+    # Ausgewählte Knoten aus dem Session-State holen.
     selected_ids = st.session_state.create_selected_ids
     selected_nodes = [draft.nodes[int(nid)] for nid in selected_ids]
     selected_sig = ",".join(str(i) for i in selected_ids)
+    # Wenn sich die Auswahl geändert hat, Aktionsmodus zurücksetzen,
+    # damit keine alte Aktion (z. B. "Kraft bearbeiten") ungewollt stehen bleibt.
     if selected_sig != st.session_state.create_prev_selection_sig:
         st.session_state.create_editor_action = ""
         st.session_state.create_prev_selection_sig = selected_sig
@@ -566,11 +664,13 @@ with left:
                 st.session_state.create_chart_key_version += 1
                 st.rerun()
 
+    # Ohne Auswahl keine Bearbeitungsaktion möglich.
     if not selected_ids:
         st.info("Bitte Knoten im Plot auswählen.")
     else:
         all_inactive = all((not n.active) for n in selected_nodes)
 
+        # Spezialfall: Nur inaktive Knoten ausgewählt -> nur Aktivieren anbieten.
         if all_inactive:
             if st.button("Knoten aktivieren", use_container_width=True):
                 changed = 0
@@ -617,6 +717,7 @@ with left:
 
         current_action = st.session_state.create_editor_action
 
+        # Detailblöcke je nach gewählter Aktion.
         if current_action == "edit_force":
             st.caption("Kraft überschreiben/löschen")
             fx, fz = st.columns(2)
@@ -717,6 +818,7 @@ with left:
                     st.success(f"Lager gelöscht: {changed}")
                     st.rerun()
 
+    # Komplett zurück auf Standardmodell in aktueller Größe.
     if st.button("Modell Ausgangszustand wiederherstellen", use_container_width=True):
         st.session_state.create_draft_struct = _build_default_structure(width, height)
         _history_reset(st.session_state.create_draft_struct)
@@ -728,6 +830,11 @@ with left:
         st.rerun()
 
 if create_model_clicked:
+    # Beim Speichern/Erstellen:
+    # - Name prüfen
+    # - eindeutigen Namen erzeugen
+    # - aktuellen Zustand in Timeline aufnehmen
+    # - Snapshot + Index schreiben
     requested_name = (st.session_state.create_model_name or "").strip()
     if not requested_name:
         st.error("Bitte einen Modellnamen eingeben.")
@@ -745,7 +852,22 @@ if create_model_clicked:
             created_at = now_iso()
             final_name = make_unique_model_name(index, requested_name)
 
-        metadata = save_model_snapshot(draft, target_id, final_name, created_at)
+        # Timeline fortführen, ohne doppelte End-Snapshots zu schreiben.
+        history_timeline = list(st.session_state.create_persisted_history or [])
+        current_snapshot = draft.to_dict()
+        if not history_timeline:
+            history_timeline = [current_snapshot]
+        elif not snapshots_equal(history_timeline[-1], current_snapshot):
+            history_timeline.append(current_snapshot)
+
+        metadata = save_model_snapshot(
+            draft,
+            target_id,
+            final_name,
+            created_at,
+            history_timeline=history_timeline,
+        )
+        st.session_state.create_persisted_history = history_timeline
 
         index = [m for m in index if int(m.get("id", -1)) != int(target_id)]
         index.append(metadata)
