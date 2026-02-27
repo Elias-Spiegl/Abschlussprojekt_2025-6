@@ -77,6 +77,31 @@ def model_path(model_id: int) -> Path:
     return STATE_DIR / f"model_{int(model_id)}.json"
 
 
+def _existing_history_timeline(model_id: int) -> list[dict]:
+    path = model_path(model_id)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            history = payload.get("history", {})
+            timeline = history.get("timeline", []) if isinstance(history, dict) else []
+            if isinstance(timeline, list):
+                return timeline
+    except Exception:
+        pass
+    return []
+
+
+def snapshots_equal(a: dict, b: dict) -> bool:
+    try:
+        return json.dumps(a, sort_keys=True, separators=(",", ":")) == json.dumps(
+            b, sort_keys=True, separators=(",", ":")
+        )
+    except Exception:
+        return False
+
+
 def make_unique_model_name(index: list[dict], requested_name: str, current_model_id: int | None = None) -> str:
     base = (requested_name or "").strip()
     if not base:
@@ -99,7 +124,13 @@ def make_unique_model_name(index: list[dict], requested_name: str, current_model
         i += 1
 
 
-def save_model_snapshot(struct: Structure, model_id: int, name: str, created_at: str) -> dict:
+def save_model_snapshot(
+    struct: Structure,
+    model_id: int,
+    name: str,
+    created_at: str,
+    history_timeline: list[dict] | None = None,
+) -> dict:
     metadata = {
         "id": int(model_id),
         "name": (name or "").strip(),
@@ -108,16 +139,25 @@ def save_model_snapshot(struct: Structure, model_id: int, name: str, created_at:
         "width": int(struct.width),
         "height": int(struct.height),
     }
-    payload = {"metadata": metadata, "structure": struct.to_dict()}
+    timeline = history_timeline if history_timeline is not None else _existing_history_timeline(int(model_id))
+    payload = {
+        "metadata": metadata,
+        "structure": struct.to_dict(),
+        "history": {"timeline": timeline},
+    }
     model_path(model_id).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return metadata
 
 
-def load_model_snapshot(model_id: int) -> tuple[Structure, dict]:
+def load_model_snapshot(model_id: int) -> tuple[Structure, dict, list[dict]]:
     payload = json.loads(model_path(model_id).read_text(encoding="utf-8"))
     if "structure" in payload and "metadata" in payload:
         struct = Structure.from_dict(payload["structure"])
         metadata = payload["metadata"]
+        history = payload.get("history", {})
+        timeline = history.get("timeline", []) if isinstance(history, dict) else []
+        if not isinstance(timeline, list):
+            timeline = []
     else:
         struct = Structure.from_dict(payload)
         metadata = {
@@ -128,7 +168,8 @@ def load_model_snapshot(model_id: int) -> tuple[Structure, dict]:
             "width": int(struct.width),
             "height": int(struct.height),
         }
-    return struct, metadata
+        timeline = []
+    return struct, metadata, timeline
 
 
 def _build_default_structure(width: int, height: int) -> Structure:
@@ -306,6 +347,8 @@ if "create_edit_model_id" not in st.session_state:
     st.session_state.create_edit_model_id = None
 if "create_edit_model_created_at" not in st.session_state:
     st.session_state.create_edit_model_created_at = None
+if "create_persisted_history" not in st.session_state:
+    st.session_state.create_persisted_history = []
 if "create_mode" not in st.session_state:
     st.session_state.create_mode = None
 
@@ -336,6 +379,7 @@ if st.session_state.create_mode is None:
             st.session_state.create_width_input = 80
             st.session_state.create_height_input = 20
             st.session_state.create_draft_struct = _build_default_structure(80, 20)
+            st.session_state.create_persisted_history = [st.session_state.create_draft_struct.to_dict()]
             st.session_state.create_selected_ids = []
             st.session_state.create_editor_action = ""
             st.session_state.create_prev_selection_sig = ""
@@ -347,6 +391,7 @@ if st.session_state.create_mode is None:
             st.session_state.create_mode = "edit"
             st.session_state.create_edit_model_id = None
             st.session_state.create_edit_model_created_at = None
+            st.session_state.create_persisted_history = []
             st.session_state.create_selected_ids = []
             st.session_state.create_editor_action = ""
             st.session_state.create_prev_selection_sig = ""
@@ -358,6 +403,7 @@ back_cols = st.columns([1.2, 3.8])
 with back_cols[0]:
     if st.button("Zur Modusauswahl", use_container_width=True):
         st.session_state.create_mode = None
+        st.session_state.create_persisted_history = []
         st.session_state.create_selected_ids = []
         st.session_state.create_editor_action = ""
         st.session_state.create_prev_selection_sig = ""
@@ -383,7 +429,7 @@ if st.session_state.create_mode == "edit":
             if st.button("Modell laden", use_container_width=True, disabled=not bool(load_options)):
                 try:
                     load_id = int(load_options[selected_load_label])
-                    loaded_struct, loaded_meta = load_model_snapshot(load_id)
+                    loaded_struct, loaded_meta, loaded_timeline = load_model_snapshot(load_id)
                     st.session_state.create_draft_struct = loaded_struct
                     st.session_state.create_last_dims = (int(loaded_struct.width), int(loaded_struct.height))
                     st.session_state.create_width_input = int(loaded_struct.width)
@@ -391,6 +437,9 @@ if st.session_state.create_mode == "edit":
                     st.session_state.create_model_name = loaded_meta.get("name", "") or ""
                     st.session_state.create_edit_model_id = int(loaded_meta.get("id", load_id))
                     st.session_state.create_edit_model_created_at = loaded_meta.get("created_at", now_iso())
+                    st.session_state.create_persisted_history = (
+                        list(loaded_timeline) if loaded_timeline else [loaded_struct.to_dict()]
+                    )
                     st.session_state.create_selected_ids = []
                     st.session_state.create_editor_action = ""
                     st.session_state.create_prev_selection_sig = ""
@@ -440,12 +489,15 @@ height = int(st.session_state.create_last_dims[1])
 if st.session_state.create_draft_struct is None:
     st.session_state.create_draft_struct = _build_default_structure(width, height)
     st.session_state.create_selected_ids = []
+    st.session_state.create_persisted_history = [st.session_state.create_draft_struct.to_dict()]
     _history_reset(st.session_state.create_draft_struct)
 
 if not st.session_state.create_history:
     _history_reset(st.session_state.create_draft_struct)
 
 draft: Structure = st.session_state.create_draft_struct
+if not st.session_state.create_persisted_history:
+    st.session_state.create_persisted_history = [draft.to_dict()]
 
 left, right = st.columns([1.15, 2.15])
 
@@ -745,7 +797,21 @@ if create_model_clicked:
             created_at = now_iso()
             final_name = make_unique_model_name(index, requested_name)
 
-        metadata = save_model_snapshot(draft, target_id, final_name, created_at)
+        history_timeline = list(st.session_state.create_persisted_history or [])
+        current_snapshot = draft.to_dict()
+        if not history_timeline:
+            history_timeline = [current_snapshot]
+        elif not snapshots_equal(history_timeline[-1], current_snapshot):
+            history_timeline.append(current_snapshot)
+
+        metadata = save_model_snapshot(
+            draft,
+            target_id,
+            final_name,
+            created_at,
+            history_timeline=history_timeline,
+        )
+        st.session_state.create_persisted_history = history_timeline
 
         index = [m for m in index if int(m.get("id", -1)) != int(target_id)]
         index.append(metadata)
