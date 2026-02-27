@@ -37,6 +37,15 @@ streamlit run main.py
 
 Danach ist die App lokal unter `http://localhost:8501` erreichbar.
 
+### Streamlit-Konfiguration (`.streamlit/config.toml`)
+
+In diesem Projekt wird die Standard-Seitenleiste von Streamlit bewusst deaktiviert:
+
+- `showSidebarNavigation = false`
+
+Grund: Die Navigation zwischen den Seiten (`Modell Übersicht`, `Modell Erstellen / Bearbeiten`, `Modell Optimieren`) wird in der App selbst über eine eigene Top-Navigation umgesetzt.  
+Ohne diese Einstellung würde zusätzlich die Streamlit-Standardnavigation erscheinen und die UI doppelt wirken.
+
 ## Seitenstruktur der App
 
 - **Modell Übersicht**

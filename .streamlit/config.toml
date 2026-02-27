@@ -1,2 +1,5 @@
+# Streamlit-Projektkonfiguration:
+# Wir blenden die Standard-Seitennavigation aus,
+# weil die App eine eigene Top-Navigation (Buttons) verwendet.
 [client]
 showSidebarNavigation = false

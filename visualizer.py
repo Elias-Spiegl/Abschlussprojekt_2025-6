@@ -6,6 +6,11 @@ from model import Structure
 class Visualizer:
     @staticmethod
     def _element_orientation(elem) -> str:
+        # Orientierung nur aus Geometrie bestimmen:
+        # - Δz = 0 -> horizontal
+        # - Δx = 0 -> vertikal
+        # - sonst diagonal
+        # Das brauchen wir später für Filter und Richtungs-Normierung.
         dx = abs(float(elem.node_j.x - elem.node_i.x))
         dz = abs(float(elem.node_j.z - elem.node_i.z))
         if dz == 0.0 and dx > 0.0:
@@ -16,6 +21,10 @@ class Visualizer:
 
     @staticmethod
     def _orientation_allowed(orientation: str, element_filter: str) -> bool:
+        # Element-Fokus aus der UI:
+        # "all" = alle Elemente
+        # "hv"  = nur horizontal + vertikal
+        # "diag"= nur diagonale
         if element_filter == "hv":
             return orientation in ("horizontal", "vertical")
         if element_filter == "diag":
@@ -28,13 +37,19 @@ class Visualizer:
         metric_mode: str = "energy",
         element_filter: str = "all",
     ) -> list[float]:
+        # Diese Hilfsfunktion berechnet je Element einen Kennwert.
+        # Wird z.B. für Auswertung und spätere Farbdarstellung genutzt.
+
         values: list[float] = []
         for elem in structure.elements:
+            # Nur aktive Verbindungen berücksichtigen.
             if not (elem.node_i.active and elem.node_j.active):
                 continue
             orientation = Visualizer._element_orientation(elem)
             if not Visualizer._orientation_allowed(orientation, element_filter):
                 continue
+
+            # Geometrie und Relativverschiebung entlang der Elementachse.
             vec = elem.node_j.pos - elem.node_i.pos
             length = float(np.linalg.norm(vec))
             if length <= 0.0:
@@ -49,6 +64,12 @@ class Visualizer:
             abs_delta_l = abs(delta_l)
             abs_strain = abs_delta_l / length
 
+            # Kennwert je nach Modus:
+            # displacement     -> mittlerer Knoten-Verschiebungsbetrag
+            # strain           -> axiale Dehnung
+            # force            -> axiale Kraft
+            # energy_per_length-> Energie pro Länge
+            # energy           -> gesamte Federenergie
             if metric_mode == "displacement":
                 disp_i = float(np.hypot(elem.node_i.u_x, elem.node_i.u_z))
                 disp_j = float(np.hypot(elem.node_j.u_x, elem.node_j.u_z))
@@ -80,13 +101,18 @@ class Visualizer:
         element_filter="all",
         show_colorbar=True,
     ):
+        # Haupt-Plot der Struktur:
+        # Geometrie, optionale Verformung, Lager/Kräfte und optional FEM-Färbung.
         fig, ax = plt.subplots(figsize=(8, 5))
         
-        # Koordinatensystem: z geht nach unten, y-Achse invertieren 
+        # Koordinatensystem wie in unserer Aufgabe:
+        # x nach rechts, z nach unten.
         ax.invert_yaxis()
         ax.set_aspect('equal')
         
-        # Axiale Dehnung als Farbwert vorbereiten (|eps|).
+        # Pro Element Kennwert vorbereiten (je nach gewähltem Modus).
+        # Wir speichern direkt (Element, Orientierung, Wert), damit wir später
+        # nicht nochmal alles neu rechnen müssen.
         element_records = []
         for elem in structure.elements:
             if not (elem.node_i.active and elem.node_j.active):
@@ -126,6 +152,11 @@ class Visualizer:
 
         color_values = []
         if colorize_elements:
+            # Farbwerte auf 0..1 normieren, damit die Colormap stabil funktioniert.
+            # Dabei gibt es 3 Varianten:
+            # 1) pro Richtung normieren (horizontal/vertikal/diagonal getrennt)
+            # 2) fixes vmax aus UI
+            # 3) globales Percentil-basiertes vmax
             raw_values = [val for _, _, val in element_records]
             if normalize_mode == "orientation":
                 groups = {"horizontal": [], "vertical": [], "diagonal": []}
@@ -156,6 +187,7 @@ class Visualizer:
                 color_values = [0.0 for _ in element_records]
                 norm = mpl.colors.Normalize(vmin=0.0, vmax=1.0)
 
+            # Optionale diskrete Farbstufen für klarere Kontraste.
             if color_levels and int(color_levels) > 1:
                 boundaries = np.linspace(0.0, 1.0, int(color_levels) + 1)
                 norm = mpl.colors.BoundaryNorm(boundaries, ncolors=256, clip=True)
@@ -167,13 +199,14 @@ class Visualizer:
             cmap = None
             sm = None
 
-        # Federn zeichnen
+        # Elemente/Federn zeichnen.
+        # Wenn Verformung aktiv ist, werden Knotenpositionen mit u_x/u_z verschoben.
         value_idx = 0
         for elem, _, _ in element_records:
             x_vals = [elem.node_i.x, elem.node_j.x]
             z_vals = [elem.node_i.z, elem.node_j.z]
 
-            # Wenn Verformung angezeigt werden soll
+            # Verformte Geometrie nur für Darstellung skalieren (nicht fürs Modell).
             if show_deformation:
                 x_vals[0] += elem.node_i.u_x * scale_factor
                 x_vals[1] += elem.node_j.u_x * scale_factor
@@ -187,7 +220,9 @@ class Visualizer:
             else:
                 ax.plot(x_vals, z_vals, 'b-', linewidth=max(0.3, line_width * 0.7), alpha=0.6) # Federn in blau
 
-        # Knoten zeichnen (nur aktive)
+        # Knoten zeichnen (nur aktive Knoten).
+        # Lager und Kräfte bekommen eigene Marker, normale Knoten sammeln wir
+        # zuerst nur in Listen und zeichnen sie später gesammelt als Hintergrund.
         active_nodes_x = []
         active_nodes_z = []
         
@@ -211,12 +246,13 @@ class Visualizer:
                         active_nodes_x.append(x)
                         active_nodes_z.append(z)
         
-        # Restliche Knoten grau
+        # Hintergrundknoten (grau) als kompakter Scatter-Plot.
         if show_background_nodes and active_nodes_x:
             scatter_alpha = 0.15 if colorize_elements else 0.5
             scatter_size = 5 if colorize_elements else 10
             ax.scatter(active_nodes_x, active_nodes_z, c='gray', s=scatter_size, alpha=scatter_alpha)
 
+        # Farbleiste nur wenn Farbmodus aktiv ist und im UI nicht deaktiviert wurde.
         if colorize_elements and sm is not None and show_colorbar:
             cbar = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
             metric_label = {
@@ -231,5 +267,6 @@ class Visualizer:
             else:
                 cbar.set_label(f"{metric_label} (normiert)", rotation=90)
 
+        # Titel zeigt immer den aktuellen Darstellungsmaßstab.
         ax.set_title(f"Struktur (Darstellung {scale_factor * 100:.0f}% | 100%=echt)")
         return fig

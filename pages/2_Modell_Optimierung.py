@@ -55,20 +55,27 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 STATE_DIR = DATA_DIR / "states"
 INDEX_FILE = DATA_DIR / "model_index.json"
+# Datenablage wie auf den anderen Seiten:
+# - model_index.json für Metadaten
+# - states/model_X.json für Struktur + Historie
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def now_iso() -> str:
+    # Einheitliches Zeitformat in der ganzen App.
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def format_ts(value: str | None) -> str:
+    # Zeitstempel für UI lesbar formatieren.
     if not value:
         return "-"
     return str(value).replace("T", " ")
 
 
 def reset_optimizer_state() -> None:
+    # Alle Optimierungs-Statuswerte zurücksetzen.
+    # Wird beim neuen Lauf oder Modellwechsel aufgerufen.
     st.session_state.opt_initialized = False
     st.session_state.opt_running = False
     st.session_state.opt_history = []
@@ -90,6 +97,8 @@ def reset_optimizer_state() -> None:
 
 
 def push_opt_snapshot(structure: Structure) -> None:
+    # Neuen Zustand an die Optimierungshistorie anhängen.
+    # Falls man vorher zurückgesprungen ist, wird der alte Vorwärtszweig entfernt.
     history = list(st.session_state.opt_history)
     view_idx = int(st.session_state.opt_view_index)
     if view_idx < len(history) - 1:
@@ -101,6 +110,7 @@ def push_opt_snapshot(structure: Structure) -> None:
 
 
 def restore_opt_snapshot(index: int) -> bool:
+    # Zustand für Iterations-Navigation wiederherstellen.
     history = st.session_state.opt_history
     if index < 0 or index >= len(history):
         return False
@@ -110,6 +120,7 @@ def restore_opt_snapshot(index: int) -> bool:
 
 
 def restore_smooth_snapshot(index: int) -> bool:
+    # Zustand für Glättungs-Undo/Redo wiederherstellen.
     history = st.session_state.smooth_history
     if index < 0 or index >= len(history):
         return False
@@ -132,11 +143,14 @@ def build_gif_bytes(
     normalize_mode: str,
     element_filter: str,
 ) -> bytes | None:
+    # GIF wird absichtlich erst auf Klick erzeugt (nicht permanent im Hintergrund),
+    # damit die normale Bedienung schnell bleibt.
     if not history:
         return None
 
     frames = []
     history_len = len(history)
+    # Lange Verläufe ausdünnen, damit die GIF-Datei nicht zu groß wird.
     step = max(1, history_len // 35)
     indices_to_render = list(range(0, history_len, step))
     if indices_to_render[-1] != history_len - 1:
@@ -183,6 +197,12 @@ def build_gif_bytes(
 
 
 def _history_series(history: list[dict]) -> tuple[list[float], list[float]]:
+    # Verlaufskurven für den Bericht:
+    # - Masse in %
+    # - maximale Verschiebung pro Zustand
+    # Input ist die gespeicherte Timeline aus Zustands-Snapshots (dict-Form).
+    # Output sind zwei Listen mit gleicher Länge:
+    # mass_data[i] und disp_data[i] gehören immer zur selben Iteration i.
     if not history:
         return [], []
 
@@ -191,11 +211,14 @@ def _history_series(history: list[dict]) -> tuple[list[float], list[float]]:
     mass_data: list[float] = []
     disp_data: list[float] = []
 
+    # Pro gespeichertem Zustand Kennzahlen ableiten.
     for state in history:
         nodes = state.get("nodes", [])
         active_count = sum(1 for n in nodes if n.get("active", True))
         mass_data.append((active_count / total_nodes_count) * 100)
 
+        # Für die Verformung nehmen wir den maximalen Betrag |u| über alle Knoten.
+        # Das ist kompakt und gut vergleichbar über Iterationen.
         u_max = 0.0
         for n in nodes:
             dist = (n.get("u_x", 0) ** 2 + n.get("u_z", 0) ** 2) ** 0.5
@@ -207,6 +230,8 @@ def _history_series(history: list[dict]) -> tuple[list[float], list[float]]:
 
 
 def _fig_to_base64(fig) -> str:
+    # Matplotlib-Figur als Base64 kodieren (für Einbettung in HTML-Bericht).
+    # Vorteil: Bericht ist eine einzelne HTML-Datei ohne externe Bilddateien.
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=160, bbox_inches="tight")
     buf.seek(0)
@@ -232,13 +257,22 @@ def build_report_html(
     smooth_history_len: int,
     gif_bytes: bytes | None,
 ) -> bytes:
+    # Kompakten HTML-Bericht mit Kennzahlen und Verlaufsgrafiken erzeugen.
+    # Die Funktion baut den Bericht komplett im Speicher auf und gibt Bytes zurück.
+    # Diese Bytes gehen direkt an den Download-Button.
     report_time = now_iso()
     mass_data, disp_data = _history_series(history)
     current_active = sum(1 for n in struct.nodes if n.active)
     total_nodes = max(1, len(struct.nodes))
     current_mass_percent = (current_active / total_nodes) * 100.0
+    # smooth_history enthält den Ausgangs-Snapshot + jeden Glättungsschritt.
+    # Deshalb -1, damit nur echte Glättungsoperationen gezählt werden.
     smooth_ops = max(0, int(smooth_history_len) - 1)
 
+    # Verlaufsgrafiken vorbereiten:
+    # - Eine Kurve für Massenverlauf
+    # - Eine Kurve für max. Verschiebung
+    # Beide werden als Base64 in den HTML-String eingebettet.
     chart_mass_b64 = ""
     chart_disp_b64 = ""
     if mass_data:
@@ -259,7 +293,11 @@ def build_report_html(
         ax2.grid(alpha=0.25)
         chart_disp_b64 = _fig_to_base64(fig2)
 
+    # Falls GIF vorhanden, ebenfalls direkt in HTML einbetten.
     gif_b64 = base64.b64encode(gif_bytes).decode("ascii") if gif_bytes else ""
+
+    # Metadaten defensiv auslesen (mit Fallbacks), damit Bericht auch dann
+    # generierbar bleibt, wenn einzelne Felder fehlen.
     model_name = (model_meta or {}).get("name") or "(ohne Namen)"
     model_id = int((model_meta or {}).get("id", 0))
     created_at = format_ts((model_meta or {}).get("created_at") or "")
@@ -273,6 +311,8 @@ def build_report_html(
     target_threshold = float(target_mass_percent)
     target_reached_iter = None
     target_reached_mass = None
+
+    # Erste Stelle ermitteln, an der das Ziel erstmals erreicht wurde.
     for idx, m in enumerate(mass_data):
         if float(m) <= target_threshold:
             target_reached_iter = int(idx)
@@ -284,6 +324,8 @@ def build_report_html(
         target_reached_text = f"Iteration {target_reached_iter} ({target_reached_mass:.1f}%)"
 
     post_target_note = ""
+    # Falls Endzustand nach Glättung wieder über der Zielmasse liegt:
+    # im Bericht transparent erklären.
     if (
         target_reached_iter is not None
         and target_reached_mass is not None
@@ -296,6 +338,9 @@ def build_report_html(
             f"weitere gespeicherte Zustände).</li>"
         )
 
+    # HTML-Template als f-String:
+    # Der Bericht ist absichtlich schlicht gehalten, damit er stabil in Browsern,
+    # in Moodle-Uploads und beim lokalen Öffnen funktioniert.
     html = f"""<!doctype html>
 <html lang="de">
 <head>
@@ -364,27 +409,32 @@ def build_report_html(
   </div>
 """
 
+    # Abschnitt "Massenabbau" nur zeigen, wenn Daten vorhanden sind.
     if chart_mass_b64:
         html += f"""
   <h2>Massenabbau über Iterationen (%)</h2>
   <img class="img" src="data:image/png;base64,{chart_mass_b64}" alt="Massenabbau über Iterationen" />
 """
+    # Abschnitt "Verformung" ebenfalls nur bei vorhandenen Daten.
     if chart_disp_b64:
         html += f"""
   <h2>Max. Verformung über Iterationen</h2>
   <img class="img" src="data:image/png;base64,{chart_disp_b64}" alt="Maximale Verformung über Iterationen" />
 """
+    # GIF-Abschnitt optional (nur wenn vorher generiert).
     if gif_b64:
         html += f"""
   <h2>Animation des Optimierungsverlaufs</h2>
   <img class="img" src="data:image/gif;base64,{gif_b64}" alt="Animation des Optimierungsverlaufs" />
 """
 
+    # Als UTF-8-Bytes zurückgeben, damit Streamlit direkt downloaden kann.
     html += "\n</body>\n</html>\n"
     return html.encode("utf-8")
 
 
 def reset_visualization_state() -> None:
+    # Visualisierung bewusst in neutralen Startzustand setzen.
     st.session_state.show_deformation = False
     st.session_state.fem_colormap = False
     st.session_state.deformation_display_percent = 100
@@ -394,6 +444,7 @@ def reset_visualization_state() -> None:
 
 
 def max_displacement(structure: Structure) -> float:
+    # Maximalen Verschiebungsbetrag über alle Knoten bestimmen.
     u_max = 0.0
     for node in structure.nodes:
         dist = float((node.u_x ** 2 + node.u_z ** 2) ** 0.5)
@@ -403,6 +454,7 @@ def max_displacement(structure: Structure) -> float:
 
 
 def load_index() -> list[dict]:
+    # Metadatenliste laden, bei Fehlern mit leerer Liste weiterarbeiten.
     if INDEX_FILE.exists():
         raw = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
         if isinstance(raw, list):
@@ -411,25 +463,30 @@ def load_index() -> list[dict]:
 
 
 def save_index(index: list[dict]) -> None:
+    # Metadatenliste persistent speichern.
     INDEX_FILE.write_text(json.dumps(index, indent=2), encoding="utf-8")
 
 
 def next_model_id(index: list[dict]) -> int:
+    # Fortlaufende Modell-ID.
     if not index:
         return 1
     return max(int(item["id"]) for item in index) + 1
 
 
 def model_path(model_id: int) -> Path:
+    # Pfad auf die State-Datei eines Modells.
     return STATE_DIR / f"model_{model_id}.json"
 
 
 def model_label(meta: dict) -> str:
+    # Kompakte Anzeige eines Modell-Eintrags.
     name = meta.get("name") or "(ohne Namen)"
     return f"{name} | erstellt: {format_ts(meta.get('created_at'))}"
 
 
 def snapshots_equal(a: dict, b: dict) -> bool:
+    # Robuster Snapshot-Vergleich über serialisiertes JSON.
     try:
         return json.dumps(a, sort_keys=True, separators=(",", ":")) == json.dumps(
             b, sort_keys=True, separators=(",", ":")
@@ -439,6 +496,8 @@ def snapshots_equal(a: dict, b: dict) -> bool:
 
 
 def merge_history(base_history: list[dict], new_segment: list[dict]) -> list[dict]:
+    # Zwei Verlaufsteile zusammenführen ohne doppelte Zustände.
+    # Wichtig für Lebenszeithistorie über mehrere Optimierungen/Glättungen.
     merged = list(base_history or [])
     if not new_segment:
         return merged
@@ -462,6 +521,7 @@ def merge_history(base_history: list[dict], new_segment: list[dict]) -> list[dic
 
 
 def _existing_history_timeline(model_id: int) -> list[dict]:
+    # Bereits gespeicherte Lebenszeithistorie aus Datei laden.
     path = model_path(model_id)
     if not path.exists():
         return []
@@ -478,6 +538,7 @@ def _existing_history_timeline(model_id: int) -> list[dict]:
 
 
 def make_unique_model_name(index: list[dict], requested_name: str, current_model_id: int | None = None) -> str:
+    # Name eindeutig machen (Case-insensitive), gleiche Logik wie auf anderen Seiten.
     base = (requested_name or "").strip()
     if not base:
         return ""
@@ -503,6 +564,7 @@ def make_unique_model_name(index: list[dict], requested_name: str, current_model
 
 
 def to_local_table_rows(index: list[dict]) -> list[dict]:
+    # Tabellenzeilen für lokale Modellübersicht vorbereiten.
     rows = []
     for m in sorted(index, key=lambda x: int(x["id"])):
         rows.append(
@@ -524,6 +586,7 @@ def save_model_snapshot(
     created_at: str,
     history_timeline: list[dict] | None = None,
 ) -> dict:
+    # Kompletten Modellzustand + Metadaten + Verlauf in Datei schreiben.
     metadata = {
         "id": int(model_id),
         "name": (name or "").strip(),
@@ -543,8 +606,9 @@ def save_model_snapshot(
 
 
 def load_model_snapshot(model_id: int) -> tuple[Structure, dict, list[dict]]:
+    # Modell laden, inkl. Fallback für ältere Dateiformate ohne Metadata/History.
     payload = json.loads(model_path(model_id).read_text(encoding="utf-8"))
-    # Backward compatibility for old plain-structure files
+    # Rückwärtskompatibilität für alte reine Structure-Dateien.
     if "structure" in payload and "metadata" in payload:
         struct = Structure.from_dict(payload["structure"])
         metadata = payload["metadata"]
@@ -566,6 +630,8 @@ def load_model_snapshot(model_id: int) -> tuple[Structure, dict, list[dict]]:
     return struct, metadata, timeline
 
 
+# Session-State Defaults: verhindert Key-Fehler bei Reruns
+# und macht den Optimierungsfluss stabil.
 if "structure" not in st.session_state:
     st.session_state.structure = None
 if "model_id" not in st.session_state:
@@ -643,6 +709,8 @@ index = load_index()
 
 pending_load_id = st.session_state.pop("startup_load_model_id", None)
 if pending_load_id is not None:
+    # Wenn die Seite über "Modell öffnen" betreten wurde,
+    # laden wir hier das gewünschte Modell direkt in den State.
     try:
         loaded_struct, loaded_meta, loaded_timeline = load_model_snapshot(int(pending_load_id))
         st.session_state.structure = loaded_struct
@@ -655,7 +723,7 @@ if pending_load_id is not None:
         reset_optimizer_state()
         reset_visualization_state()
     except Exception:
-        # Startseite kann eine ungültige ID übergeben haben (gelöscht/defekt).
+        # Startseite kann eine ungültige ID übergeben haben (z. B. gelöscht).
         pass
 
 if st.session_state.structure is None:
@@ -668,7 +736,7 @@ if not st.session_state.model_lifetime_history:
     st.session_state.model_lifetime_history = [struct.to_dict()]
 opt = TopologyOptimizer(struct)
 
-# Data snapshots for editor/overview
+# Aktuelle Kennzahlen für Info-Karten und Tabellen aufbereiten.
 load_nodes = [n for n in struct.nodes if n.force_x != 0 or n.force_z != 0]
 support_nodes = [n for n in struct.nodes if n.fixed_x or n.fixed_z]
 force_rows = [
@@ -697,7 +765,8 @@ current_model_meta = next(
     None,
 )
 
-# Visualization settings from session state (controls live further down).
+# Visualisierungsparameter aus Session-State holen.
+# Gesteuert werden sie in den unteren Panels.
 visualization_physics_ok = opt.solve_step()
 show_deformation = bool(st.session_state.show_deformation)
 if show_deformation:
@@ -719,7 +788,8 @@ metric_mode = {
 }.get(st.session_state.fem_metric_mode, "energy_per_length")
 show_background_nodes = not fem_color_map
 
-# Top layout: left model info + automation, right status + plot.
+# Oberes Layout:
+# links Modellinfos + Optimierungssteuerung, rechts Status + Plot + Export.
 row_top_left, row_top_right = st.columns([0.85, 2.15])
 
 with row_top_left:
@@ -781,6 +851,7 @@ with row_top_left:
         )
         allowed_softening_ratio = 1.0 + (max_stiffness_loss_percent / 100.0)
 
+        # Erster Start eines Laufs.
         if not st.session_state.opt_initialized:
             if st.button("Start Optimierung", use_container_width=True):
                 if not opt.solve_step():
@@ -804,6 +875,7 @@ with row_top_left:
                     push_opt_snapshot(struct)
                     st.rerun()
         else:
+            # Bereits initialisiert: Stop/Run + Iterationsnavigation.
             ctrl1, ctrl2, ctrl3 = st.columns([1.2, 1, 1])
             with ctrl1:
                 play_label = "Stop Optimization" if st.session_state.opt_running else "Run Optimization"
@@ -865,6 +937,7 @@ with row_top_right:
                     st.session_state.opt_status_type = "info"
                     st.rerun()
 
+    # Hauptplot des aktuellen Zustands.
     fig = Visualizer.plot_structure(
         struct,
         show_deformation=show_deformation,
@@ -889,6 +962,8 @@ with row_top_right:
         [struct.to_dict()],
     )
     with export_col:
+        # Exporte bewusst bedarfsorientiert:
+        # PNG sofort möglich, GIF/Report erst nach abgeschlossenem Lauf.
         gif_ready = bool(st.session_state.opt_finished and len(export_history) > 1)
         if gif_ready:
             gif_signature = (
@@ -1024,7 +1099,7 @@ with row_top_right:
     plot_placeholder.pyplot(fig)
     plt.close(fig)
 
-# Bottom layout: smoothing + visualization (side by side).
+# Unteres Layout: Glättung und Visualisierung nebeneinander.
 panel_smooth, panel_vis = st.columns(2)
 
 with panel_smooth:
@@ -1036,6 +1111,7 @@ with panel_smooth:
             horizontal=True,
             key="smooth_strength_selector",
         )
+        # Glättung ist nur sinnvoll, wenn Optimierung pausiert/fertig ist.
         is_smooth_ready = st.session_state.opt_initialized and st.session_state.opt_finished and (not st.session_state.opt_running)
         if not is_smooth_ready:
             st.caption("Wird nach abgeschlossener Optimierung aktiv.")
@@ -1044,6 +1120,7 @@ with panel_smooth:
             if st.button("Glättung anwenden", use_container_width=True, disabled=not is_smooth_ready):
                 if int(st.session_state.smooth_index) < len(st.session_state.smooth_history) - 1:
                     st.session_state.smooth_history = st.session_state.smooth_history[: int(st.session_state.smooth_index) + 1]
+                # Topologie-Nachbearbeitung am aktuellen Zustand ausführen.
                 pp_stats = opt.beautify_topology(iterations=int(smooth_strength))
                 st.session_state.smooth_history.append(struct.to_dict())
                 st.session_state.smooth_index = len(st.session_state.smooth_history) - 1
@@ -1164,7 +1241,7 @@ with panel_vis:
                 key="fem_metric_mode",
             )
 
-# Live status + optimization loop
+# Live-Status + eigentliche Optimierungsschleife.
 live_active = sum(1 for n in struct.nodes if n.active)
 live_percent = (live_active / total_nodes) * 100
 start_active_for_progress = int(st.session_state.opt_start_active) if int(st.session_state.opt_start_active) > 0 else total_nodes
@@ -1183,12 +1260,15 @@ if st.session_state.opt_initialized:
 
 if st.session_state.opt_initialized and st.session_state.opt_running:
     run_started = True
+    # Wenn vorher in alte Iterationen gesprungen wurde,
+    # starten wir die Fortsetzung ab genau diesem sichtbaren Stand.
     if int(st.session_state.opt_view_index) < len(st.session_state.opt_history) - 1:
         restore_opt_snapshot(int(st.session_state.opt_view_index))
         st.session_state.opt_history = st.session_state.opt_history[: int(st.session_state.opt_view_index) + 1]
 
     stop_reason = ""
     while st.session_state.opt_running:
+        # Abbruchkriterien zuerst prüfen.
         live_active = sum(1 for n in struct.nodes if n.active)
         if live_active <= int(st.session_state.opt_target_count):
             st.session_state.opt_running = False
@@ -1199,6 +1279,7 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
             stop_reason = "Iterationslimit erreicht"
             break
 
+        # Dynamische Entfernungsrate: am Anfang vorsichtiger.
         current_rate = 0.01 if int(st.session_state.opt_iteration) < 5 else 0.015
         success, message = opt.optimize_step(
             remove_ratio=current_rate,
@@ -1209,6 +1290,7 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
             stop_reason = str(message)
             break
 
+        # Erfolgreichen Schritt in Historie sichern.
         push_opt_snapshot(struct)
         live_active = sum(1 for n in struct.nodes if n.active)
         live_percent = (live_active / total_nodes) * 100
@@ -1223,6 +1305,7 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
         opt_mass_placeholder.caption(f"{live_percent:.1f}%")
         opt_progress_bar.progress(min(max(mass_fraction, 0.0), 1.0))
 
+        # Während der Schleife nur Plot + Status aktualisieren.
         fig = Visualizer.plot_structure(
             struct,
             show_deformation=bool(st.session_state.show_deformation),
@@ -1250,6 +1333,7 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
         time.sleep(0.01)
 
     if not st.session_state.opt_running:
+        # Laufabschluss: Status sichern, Historie zusammenführen, auf Datei schreiben.
         st.session_state.opt_stop_reason = stop_reason
         st.session_state.opt_finished = True
         st.session_state.smooth_history = [struct.to_dict()]
