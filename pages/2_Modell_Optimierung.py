@@ -268,7 +268,33 @@ def build_report_html(
     stop_text = stop_reason or "-"
     initial_mass = mass_data[0] if mass_data else 100.0
     final_mass = mass_data[-1] if mass_data else current_mass_percent
+    min_mass = min(mass_data) if mass_data else final_mass
     max_disp = max(disp_data) if disp_data else 0.0
+    target_threshold = float(target_mass_percent)
+    target_reached_iter = None
+    target_reached_mass = None
+    for idx, m in enumerate(mass_data):
+        if float(m) <= target_threshold:
+            target_reached_iter = int(idx)
+            target_reached_mass = float(m)
+            break
+
+    target_reached_text = "-"
+    if target_reached_iter is not None and target_reached_mass is not None:
+        target_reached_text = f"Iteration {target_reached_iter} ({target_reached_mass:.1f}%)"
+
+    post_target_note = ""
+    if (
+        target_reached_iter is not None
+        and target_reached_mass is not None
+        and final_mass > target_threshold
+    ):
+        post_target_note = (
+            f"<li>Hinweis: Ziel-Masse wurde bereits in Iteration {target_reached_iter} "
+            f"({target_reached_mass:.1f}%) erreicht, die aktuelle End-Masse liegt bei "
+            f"{final_mass:.1f}% durch nachgelagerte Schritte (z. B. Glättung oder "
+            f"weitere gespeicherte Zustände).</li>"
+        )
 
     html = f"""<!doctype html>
 <html lang="de">
@@ -316,7 +342,9 @@ def build_report_html(
         <tr><td>Ziel-Masse</td><td>{int(target_mass_percent)}%</td></tr>
         <tr><td>Max. Steifigkeitsverlust</td><td>{int(max_stiffness_loss_percent)}%</td></tr>
         <tr><td>Start-Masse</td><td>{initial_mass:.1f}%</td></tr>
-        <tr><td>End-Masse</td><td>{final_mass:.1f}%</td></tr>
+        <tr><td>End-Masse (Berichtszeitpunkt)</td><td>{final_mass:.1f}%</td></tr>
+        <tr><td>Min. Masse im Verlauf</td><td>{min_mass:.1f}%</td></tr>
+        <tr><td>Erste Zielerreichung</td><td>{escape(target_reached_text)}</td></tr>
         <tr><td>Max. Verformung (über Verlauf)</td><td>{max_disp:.6f}</td></tr>
         <tr><td>Stop-Grund</td><td>{escape(stop_text)}</td></tr>
         <tr><td>Glättungsoperationen</td><td>{smooth_ops}</td></tr>
@@ -331,6 +359,7 @@ def build_report_html(
       <li>Optimierungsverlauf umfasst {max(0, len(history) - 1)} Schritte mit fortlaufender Materialreduktion.</li>
       <li>Aktueller Zustand: {current_active} aktive Knoten von {total_nodes}.</li>
       <li>Falls genutzt, wurden Glättungsschritte auf das Ergebnis angewendet ({smooth_ops} Schritte).</li>
+      {post_target_note}
     </ul>
   </div>
 """
