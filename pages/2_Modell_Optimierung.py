@@ -1146,8 +1146,9 @@ if st.session_state.opt_initialized:
     run_state = "Läuft" if st.session_state.opt_running else "Pausiert"
     current_rate = 0.01 if int(st.session_state.opt_iteration) < 5 else 0.015
     opt_status_placeholder.info(
-        f"Status: {run_state} | Iter: {int(st.session_state.opt_iteration)} | "
-        f"Remove-Rate: {current_rate * 100:.1f}%"
+        f"Status: {run_state} &emsp;|&emsp; "
+        f"Iteration: {int(st.session_state.opt_iteration)} &emsp;|&emsp; "
+        f"Dynamische Entfernungsrate: {current_rate * 100:.1f}%"
     )
 
 if st.session_state.opt_initialized and st.session_state.opt_running:
@@ -1183,8 +1184,9 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
         live_percent = (live_active / total_nodes) * 100
         current_rate = 0.01 if int(st.session_state.opt_iteration) < 5 else 0.015
         opt_status_placeholder.info(
-            f"Status: Läuft | Iter: {int(st.session_state.opt_iteration)} | "
-            f"Remove-Rate: {current_rate * 100:.1f}%"
+            f"Status: {run_state} &emsp;|&emsp; "
+            f"Iteration: {int(st.session_state.opt_iteration)} &emsp;|&emsp; "
+            f"Dynamische Entfernungsrate: {current_rate * 100:.1f}%"
         )
         start_active_for_progress = int(st.session_state.opt_start_active) if int(st.session_state.opt_start_active) > 0 else total_nodes
         mass_fraction = live_active / max(1, start_active_for_progress)
