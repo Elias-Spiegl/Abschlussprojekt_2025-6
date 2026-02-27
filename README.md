@@ -52,18 +52,9 @@ Danach ist die App lokal unter `http://localhost:8501` erreichbar.
   - Visualisierung und FEM-Farbskala
   - PNG/GIF/HTML-Report Export
 
-## Umgesetzte Mindestanforderungen
+## Mindestanorderungen
 
-- Python-Anwendung mit Streamlit-Web-UI
-- Topologieoptimierung für 2D-Strukturen mit den Projekt-Einschränkungen
-- Ausgangsstruktur als Rechteck über Breite/Höhe definierbar
-- Randbedingungen (Loslager/Festlager) an Knoten
-- Externe Kräfte an Knoten
-- Visualisierung vor, während und nach der Optimierung inkl. Verformung
-- Speichern/Laden des Modellzustands (Fortsetzung möglich)
-- FEM-orientierte vereinfachte physikalische Lösung
-- Verifikation, dass die Struktur nicht auseinanderfällt (Graph-Konnektivitätscheck)
-- Export der optimierten Geometrie als Bild (PNG)
+die Mindestanforderungen wurden alle erfüllt. darüberhinaus wurden einige Erweiterungen implementiert (siehe "Erweiterungen im Projekt").
 
 ## Validierung am MBB-Balken
 
@@ -137,61 +128,9 @@ Zusätzlich zu den Mindestanforderungen wurden folgende Erweiterungen umgesetzt.
 
 ## UML (Mermaid)
 
-```mermaid
-classDiagram
-    class Node {
-        +id: int
-        +x: float
-        +z: float
-        +active: bool
-        +u_x: float
-        +u_z: float
-        +force_x: float
-        +force_z: float
-        +fixed_x: bool
-        +fixed_z: bool
-        +to_dict()
-    }
+![UML-Klassendiagramm](/Users/eliasspiegl/Documents/MCI/Softwaredesign/Abschlussprojekt_2025-6/docs/UML_Klassendiagramm.png)
 
-    class Element {
-        +node_i: Node
-        +node_j: Node
-        +k: float
-    }
-
-    class Structure {
-        +width: int
-        +height: int
-        +nodes: list~Node~
-        +elements: list~Element~
-        +to_dict()
-        +from_dict(data)
-    }
-
-    class PhysicsSolver {
-        +calculate_element_stiffness(k, node_i_pos, node_j_pos)
-        +solve_system(K, F, fixed_dofs)
-    }
-
-    class TopologyOptimizer {
-        +solve_step()
-        +optimize_step(remove_ratio, max_displacement_limit)
-        +check_stability_and_get_main_component()
-        +beautify_topology(iterations)
-    }
-
-    class Visualizer {
-        +plot_structure(...)
-        +compute_element_values(...)
-    }
-
-    Structure "1" o-- "*" Node
-    Structure "1" o-- "*" Element
-    Element "*" --> "2" Node
-    TopologyOptimizer --> Structure
-    TopologyOptimizer --> PhysicsSolver
-    Visualizer --> Structure
-```
+Mermaid-Quelle: `docs/UML_Klassendiagramm.mmd`
 
 ## Quellen
 
