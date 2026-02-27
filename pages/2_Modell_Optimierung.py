@@ -19,6 +19,31 @@ st.markdown(
     <style>
     [data-testid="stSidebar"] {display: none !important;}
     [data-testid="collapsedControl"] {display: none !important;}
+    button[kind="primary"] {
+      min-height: 3.2rem !important;
+      font-size: 1.1rem !important;
+      font-weight: 700 !important;
+      border-radius: 0.75rem !important;
+      border: 1px solid #5a6273 !important;
+      background: #2f3542 !important;
+      color: #e8ecf4 !important;
+      box-shadow: none !important;
+    }
+    button[kind="primary"]:hover {
+      background: #3a4150 !important;
+      border-color: #6a7388 !important;
+    }
+    button[kind="primary"]:active {
+      background: #464f61 !important;
+      border-color: #7b859b !important;
+    }
+    button[kind="primary"]:disabled {
+      background: #d9dde5 !important;
+      border-color: #aeb6c5 !important;
+      color: #1f2937 !important;
+      box-shadow: none !important;
+      opacity: 1 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -85,6 +110,70 @@ def restore_smooth_snapshot(index: int) -> bool:
     st.session_state.structure = Structure.from_dict(history[index])
     st.session_state.smooth_index = index
     return True
+
+
+def build_gif_bytes(
+    history: list[dict],
+    show_deformation: bool,
+    scale_factor: float,
+    fem_color_map: bool,
+    color_percentile: int,
+    show_background_nodes: bool,
+    line_width: float,
+    color_levels: int,
+    fixed_color_vmax,
+    metric_mode: str,
+    normalize_mode: str,
+    element_filter: str,
+) -> bytes | None:
+    if not history:
+        return None
+
+    frames = []
+    history_len = len(history)
+    step = max(1, history_len // 35)
+    indices_to_render = list(range(0, history_len, step))
+    if indices_to_render[-1] != history_len - 1:
+        indices_to_render.append(history_len - 1)
+
+    for i in indices_to_render:
+        temp_struct = Structure.from_dict(history[i])
+        fig = Visualizer.plot_structure(
+            temp_struct,
+            show_deformation=show_deformation,
+            scale_factor=scale_factor,
+            selected_node_id=None,
+            colorize_elements=fem_color_map,
+            color_percentile=color_percentile,
+            show_background_nodes=show_background_nodes,
+            line_width=line_width,
+            color_levels=color_levels,
+            fixed_color_vmax=fixed_color_vmax,
+            metric_mode=metric_mode,
+            normalize_mode=normalize_mode,
+            element_filter=element_filter,
+            show_colorbar=False,
+        )
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor="white")
+        buf.seek(0)
+        frames.append(Image.open(buf).copy())
+        plt.close(fig)
+        buf.close()
+
+    if not frames:
+        return None
+
+    gif_buf = io.BytesIO()
+    frames[0].save(
+        gif_buf,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=200,
+        loop=0,
+    )
+    return gif_buf.getvalue()
 
 
 def reset_visualization_state() -> None:
@@ -213,24 +302,6 @@ if "model_name" not in st.session_state:
     st.session_state.model_name = ""
 if "model_created_at" not in st.session_state:
     st.session_state.model_created_at = None
-if "selected_x" not in st.session_state:
-    st.session_state.selected_x = 0
-if "selected_z" not in st.session_state:
-    st.session_state.selected_z = 0
-if "editor_node_id" not in st.session_state:
-    st.session_state.editor_node_id = None
-if "existing_load_id" not in st.session_state:
-    st.session_state.existing_load_id = -1
-if "existing_support_id" not in st.session_state:
-    st.session_state.existing_support_id = -1
-if "editor_focus_mode" not in st.session_state:
-    st.session_state.editor_focus_mode = "Knoten"
-if "force_edit_fx" not in st.session_state:
-    st.session_state.force_edit_fx = 0.0
-if "force_edit_fz" not in st.session_state:
-    st.session_state.force_edit_fz = 0.0
-if "support_edit_mode" not in st.session_state:
-    st.session_state.support_edit_mode = "Frei"
 if "opt_initialized" not in st.session_state:
     st.session_state.opt_initialized = False
 if "opt_running" not in st.session_state:
@@ -275,18 +346,20 @@ elif st.session_state.fem_metric_mode == "Strain":
     st.session_state.fem_metric_mode = "Dehnung"
 elif st.session_state.fem_metric_mode == "Displacement":
     st.session_state.fem_metric_mode = "Verschiebung"
-if "rename_model_name" not in st.session_state:
-    st.session_state.rename_model_name = ""
+if "opt_gif_bytes" not in st.session_state:
+    st.session_state.opt_gif_bytes = None
+if "opt_gif_signature" not in st.session_state:
+    st.session_state.opt_gif_signature = None
 
 nav1, nav2, nav3 = st.columns([1, 1, 1])
 with nav1:
-    if st.button("Modell Übersicht", use_container_width=True):
+    if st.button("Modell Übersicht", use_container_width=True, type="primary"):
         st.switch_page("main.py")
 with nav2:
-    if st.button("Modell Erstellen", use_container_width=True):
+    if st.button("Modell Erstellen / Bearbeiten", use_container_width=True, type="primary"):
         st.switch_page("pages/1_Modell_Erstellen.py")
 with nav3:
-    st.button("Modell Optimieren", use_container_width=True, disabled=True)
+    st.button("Modell Optimieren", use_container_width=True, disabled=True, type="primary")
 
 index = load_index()
 
@@ -298,9 +371,6 @@ if pending_load_id is not None:
         st.session_state.model_id = int(loaded_meta["id"])
         st.session_state.model_name = loaded_meta.get("name", "")
         st.session_state.model_created_at = loaded_meta.get("created_at", now_iso())
-        st.session_state.selected_x = 0
-        st.session_state.selected_z = 0
-        st.session_state.editor_node_id = None
         reset_optimizer_state()
         reset_visualization_state()
     except Exception:
@@ -314,32 +384,6 @@ if st.session_state.structure is None:
 
 struct = st.session_state.structure
 opt = TopologyOptimizer(struct)
-
-
-def _jump_to_node(node_id: int) -> None:
-    st.session_state.selected_x = int(node_id % struct.width)
-    st.session_state.selected_z = int(node_id // struct.width)
-    st.session_state.editor_node_id = None
-
-
-def _on_load_select_change() -> None:
-    node_id = int(st.session_state.existing_load_id)
-    if node_id >= 0:
-        _jump_to_node(node_id)
-        st.session_state.existing_support_id = -1
-
-
-def _on_support_select_change() -> None:
-    node_id = int(st.session_state.existing_support_id)
-    if node_id >= 0:
-        _jump_to_node(node_id)
-        st.session_state.existing_load_id = -1
-
-
-st.session_state.selected_x = min(max(int(st.session_state.selected_x), 0), struct.width - 1)
-st.session_state.selected_z = min(max(int(st.session_state.selected_z), 0), struct.height - 1)
-selected_id = int(st.session_state.selected_z) * struct.width + int(st.session_state.selected_x)
-selected_node = struct.nodes[selected_id]
 
 # Data snapshots for editor/overview
 load_nodes = [n for n in struct.nodes if n.force_x != 0 or n.force_z != 0]
@@ -388,123 +432,58 @@ metric_mode = {
 }.get(st.session_state.fem_metric_mode, "energy_per_length")
 show_background_nodes = not fem_color_map
 
-# Top layout: left model panel, right plot area.
-row_top_left, row_top_right = st.columns([0.75, 2.25])
+# Top layout: left model info + automation, right status + plot.
+row_top_left, row_top_right = st.columns([0.85, 2.15])
 
 with row_top_left:
     with st.container(border=True):
+        st.markdown(f"### Modellname: {st.session_state.model_name or '(ohne Namen)'}")
         st.caption(f"Modell erstellt: {format_ts(st.session_state.model_created_at)}")
-        st.text_input("Aktueller Name", value=st.session_state.model_name, disabled=True)
-        st.text_input("Neuer Name", key="rename_model_name")
-        if st.button("Neuen Namen speichern", use_container_width=True):
-            if st.session_state.model_id is None:
-                st.error("Kein Modellkontext vorhanden.")
-            else:
-                requested_name = (st.session_state.rename_model_name or "").strip()
-                if not requested_name:
-                    st.error("Bitte einen neuen Modellnamen eingeben.")
+        st.caption(f"Knoten aktiv: {current_active} / {total_nodes}")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("Kräfte", len(force_rows))
+        with m2:
+            st.metric("Loslager", roller_support_count)
+        with m3:
+            st.metric("Festlager", fixed_support_count)
+
+        with st.expander("Details Kräfte/Lager", expanded=False):
+            d1, d2 = st.columns(2)
+            with d1:
+                if force_rows:
+                    st.dataframe(force_rows, use_container_width=True, hide_index=True, height=140)
                 else:
-                    final_name = make_unique_model_name(
-                        index,
-                        requested_name,
-                        current_model_id=int(st.session_state.model_id),
-                    )
-                    metadata = save_model_snapshot(
-                        struct,
-                        int(st.session_state.model_id),
-                        final_name,
-                        st.session_state.model_created_at or now_iso(),
-                    )
-                    index = [m for m in index if int(m["id"]) != int(metadata["id"])]
-                    index.append(metadata)
-                    save_index(index)
-                    st.session_state.model_name = final_name
-                    if final_name != requested_name:
-                        st.info(f"Name bereits vergeben, gespeichert als: {final_name}")
-                    st.success("Name gespeichert.")
-                    st.rerun()
+                    st.caption("Keine Kräfte gesetzt")
+            with d2:
+                if support_rows:
+                    st.dataframe(support_rows, use_container_width=True, hide_index=True, height=140)
+                else:
+                    st.caption("Keine Lager gesetzt")
+
         if st.button("Modellstand Speichern", use_container_width=True):
             if st.session_state.model_id is None:
                 st.error("Kein Modellkontext vorhanden.")
             else:
-                requested_name = (st.session_state.model_name or "").strip()
-                if not requested_name:
-                    st.error("Bitte einen Modellnamen eingeben.")
-                else:
-                    final_name = make_unique_model_name(
-                        index,
-                        requested_name,
-                        current_model_id=int(st.session_state.model_id),
-                    )
-                    metadata = save_model_snapshot(
-                        struct,
-                        int(st.session_state.model_id),
-                        final_name,
-                        st.session_state.model_created_at or now_iso(),
-                    )
-                    index = [m for m in index if int(m["id"]) != int(metadata["id"])]
-                    index.append(metadata)
-                    save_index(index)
-                    st.session_state.model_name = final_name
-                    if final_name != requested_name:
-                        st.info(f"Name bereits vergeben, gespeichert als: {final_name}")
-                    st.success("Modell gespeichert.")
-                    st.rerun()
+                metadata = save_model_snapshot(
+                    struct,
+                    int(st.session_state.model_id),
+                    st.session_state.model_name or "",
+                    st.session_state.model_created_at or now_iso(),
+                )
+                index = [m for m in index if int(m["id"]) != int(metadata["id"])]
+                index.append(metadata)
+                save_index(index)
+                st.success("Modell gespeichert.")
+                st.rerun()
 
-with row_top_right:
-    if not visualization_physics_ok:
-        st.warning("Visualisierung: Modell aktuell instabil (Lager/Kräfte prüfen).")
-
-    fig = Visualizer.plot_structure(
-        struct,
-        show_deformation=show_deformation,
-        scale_factor=scale,
-        selected_node_id=selected_id,
-        colorize_elements=fem_color_map,
-        color_percentile=color_percentile,
-        show_background_nodes=show_background_nodes,
-        line_width=line_width,
-        color_levels=color_levels,
-        fixed_color_vmax=fixed_color_vmax,
-        metric_mode=metric_mode,
-        normalize_mode=normalize_mode,
-        element_filter=element_filter,
-    )
-    png_buffer = io.BytesIO()
-    fig.savefig(png_buffer, format="png", dpi=200, bbox_inches="tight")
-    png_buffer.seek(0)
-    st.download_button(
-        "Plot als .png herunterladen",
-        data=png_buffer.getvalue(),
-        file_name=f"modell_{st.session_state.model_id}_topologie.png",
-        mime="image/png",
-        use_container_width=True,
-    )
-    plot_placeholder = st.empty()
-    plot_placeholder.pyplot(fig)
-    plt.close(fig)
-
-# Bottom layout: automation, visualization, editor (side by side).
-panel_auto, panel_vis, panel_editor = st.columns(3)
-
-with panel_auto:
     with st.container(border=True):
         st.markdown("**Automation**")
-        mass_info_placeholder = st.empty()
-        current_percent = (current_active / total_nodes) * 100
-        mass_info_placeholder.info(f"Aktuelle Masse: {current_percent:.1f}%")
-
         target_mass_percent = st.slider("Ziel-Masse (%)", 10, 99, 50)
-        st.caption("Entfernungsrate: Dynamisch (1% -> 1.5%)")
-
         max_stiffness_loss_percent = st.slider(
             "Max. Steifigkeitsverlust (%)", 0, 100, 50, step=1
         )
         allowed_softening_ratio = 1.0 + (max_stiffness_loss_percent / 100.0)
-        st.caption(
-            f"Zulässig bis +{max_stiffness_loss_percent}% Verformung gegenüber der Referenz "
-            f"(entspricht Faktor {allowed_softening_ratio:.2f})."
-        )
 
         if not st.session_state.opt_initialized:
             if st.button("Start Optimierung", use_container_width=True):
@@ -516,6 +495,8 @@ with panel_auto:
                     st.session_state.opt_initialized = True
                     st.session_state.opt_running = True
                     st.session_state.opt_finished = False
+                    st.session_state.opt_gif_bytes = None
+                    st.session_state.opt_gif_signature = None
                     st.session_state.opt_target_count = int(total_nodes * (target_mass_percent / 100))
                     st.session_state.opt_start_active = sum(1 for n in struct.nodes if n.active)
                     st.session_state.opt_abs_limit = max_displacement(struct) * allowed_softening_ratio
@@ -525,11 +506,6 @@ with panel_auto:
                     push_opt_snapshot(struct)
                     st.rerun()
         else:
-            total_steps = max(1, len(st.session_state.opt_history))
-            current_step = min(max(int(st.session_state.opt_view_index) + 1, 1), total_steps)
-            if not st.session_state.opt_running:
-                st.caption(f"Iteration: {current_step}/{total_steps}")
-
             ctrl1, ctrl2, ctrl3 = st.columns([1.2, 1, 1])
             with ctrl1:
                 play_label = "Stop Optimization" if st.session_state.opt_running else "Run Optimization"
@@ -547,6 +523,8 @@ with panel_auto:
                             st.session_state.opt_abs_limit = max_displacement(struct) * allowed_softening_ratio
                             st.session_state.opt_running = True
                             st.session_state.opt_finished = False
+                            st.session_state.opt_gif_bytes = None
+                            st.session_state.opt_gif_signature = None
                             st.session_state.smooth_history = []
                             st.session_state.smooth_index = -1
                             st.session_state.opt_stop_reason = ""
@@ -568,51 +546,106 @@ with panel_auto:
                         st.session_state.opt_status_msg = "Eine Iteration vor."
                         st.rerun()
 
-        status_container = st.empty()
-        progress_bar = st.progress(0.0)
-        plot_status_placeholder = st.empty()
-        message_placeholder = st.empty()
-        if str(st.session_state.opt_status_msg).strip():
-            if st.button("Meldungen zurücksetzen", use_container_width=True):
-                st.session_state.opt_status_msg = ""
-                st.session_state.opt_status_type = "info"
-                st.rerun()
+with row_top_right:
+    if not visualization_physics_ok:
+        st.warning("Visualisierung: Modell aktuell instabil (Lager/Kräfte prüfen).")
 
-        if st.session_state.opt_initialized and st.session_state.opt_finished and (not st.session_state.opt_running):
-            st.markdown("**Struktur Glätten**")
-            smooth_strength = st.radio(
-                "Stärke",
-                options=[1, 2, 3],
-                horizontal=True,
-                key="smooth_strength_selector",
-            )
-            s_col1, s_col2, s_col3 = st.columns([1.4, 1, 1])
-            with s_col1:
-                if st.button("Glättung anwenden", use_container_width=True):
-                    if int(st.session_state.smooth_index) < len(st.session_state.smooth_history) - 1:
-                        st.session_state.smooth_history = st.session_state.smooth_history[: int(st.session_state.smooth_index) + 1]
-                    pp_stats = opt.beautify_topology(iterations=int(smooth_strength))
-                    st.session_state.smooth_history.append(struct.to_dict())
-                    st.session_state.smooth_index = len(st.session_state.smooth_history) - 1
-                    st.session_state.opt_status_type = "success"
-                    st.session_state.opt_status_msg = (
-                        f"Glättung angewendet: +{pp_stats['activated']} / -{pp_stats['deactivated']} Knoten."
-                    )
+    status_col, export_col = st.columns([3.2, 1.0])
+    with status_col:
+        with st.container(border=True):
+            st.markdown("**Optimizer Status**")
+            opt_status_placeholder = st.empty()
+            st.markdown("### Masse")
+            opt_mass_placeholder = st.empty()
+            opt_progress_bar = st.progress(0.0)
+            opt_message_placeholder = st.empty()
+            if str(st.session_state.opt_status_msg).strip():
+                if st.button("Meldungen zurücksetzen", key="reset_status_messages_top"):
+                    st.session_state.opt_status_msg = ""
+                    st.session_state.opt_status_type = "info"
                     st.rerun()
-            with s_col2:
-                can_undo = int(st.session_state.smooth_index) > 0
-                if st.button("Rückgängig", use_container_width=True, disabled=not can_undo):
-                    if restore_smooth_snapshot(int(st.session_state.smooth_index) - 1):
-                        st.session_state.opt_status_type = "info"
-                        st.session_state.opt_status_msg = "Glättung rückgängig gemacht."
-                        st.rerun()
-            with s_col3:
-                can_redo = int(st.session_state.smooth_index) < (len(st.session_state.smooth_history) - 1)
-                if st.button("Wiederholen", use_container_width=True, disabled=not can_redo):
-                    if restore_smooth_snapshot(int(st.session_state.smooth_index) + 1):
-                        st.session_state.opt_status_type = "info"
-                        st.session_state.opt_status_msg = "Glättung wiederholt."
-                        st.rerun()
+
+    fig = Visualizer.plot_structure(
+        struct,
+        show_deformation=show_deformation,
+        scale_factor=scale,
+        selected_node_id=None,
+        colorize_elements=fem_color_map,
+        color_percentile=color_percentile,
+        show_background_nodes=show_background_nodes,
+        line_width=line_width,
+        color_levels=color_levels,
+        fixed_color_vmax=fixed_color_vmax,
+        metric_mode=metric_mode,
+        normalize_mode=normalize_mode,
+        element_filter=element_filter,
+        show_colorbar=False,
+    )
+    png_buffer = io.BytesIO()
+    fig.savefig(png_buffer, format="png", dpi=200, bbox_inches="tight")
+    png_buffer.seek(0)
+    with export_col:
+        if st.session_state.opt_finished and st.session_state.opt_gif_bytes:
+            st.download_button(
+                "GIF Herunterladen",
+                data=st.session_state.opt_gif_bytes,
+                file_name=f"modell_{st.session_state.model_id}_animation.gif",
+                mime="image/gif",
+                use_container_width=True,
+            )
+        st.download_button(
+            "PNG Exprotieren",
+            data=png_buffer.getvalue(),
+            file_name=f"modell_{st.session_state.model_id}_topologie.png",
+            mime="image/png",
+            use_container_width=True,
+        )
+    plot_placeholder = st.empty()
+    plot_placeholder.pyplot(fig)
+    plt.close(fig)
+
+# Bottom layout: smoothing + visualization (side by side).
+panel_smooth, panel_vis = st.columns(2)
+
+with panel_smooth:
+    with st.container(border=True):
+        st.markdown("**Struktur Glätten**")
+        smooth_strength = st.radio(
+            "Stärke",
+            options=[1, 2, 3],
+            horizontal=True,
+            key="smooth_strength_selector",
+        )
+        is_smooth_ready = st.session_state.opt_initialized and st.session_state.opt_finished and (not st.session_state.opt_running)
+        if not is_smooth_ready:
+            st.caption("Wird nach abgeschlossener Optimierung aktiv.")
+        s_col1, s_col2, s_col3 = st.columns([1.4, 1, 1])
+        with s_col1:
+            if st.button("Glättung anwenden", use_container_width=True, disabled=not is_smooth_ready):
+                if int(st.session_state.smooth_index) < len(st.session_state.smooth_history) - 1:
+                    st.session_state.smooth_history = st.session_state.smooth_history[: int(st.session_state.smooth_index) + 1]
+                pp_stats = opt.beautify_topology(iterations=int(smooth_strength))
+                st.session_state.smooth_history.append(struct.to_dict())
+                st.session_state.smooth_index = len(st.session_state.smooth_history) - 1
+                st.session_state.opt_status_type = "success"
+                st.session_state.opt_status_msg = (
+                    f"Glättung angewendet: +{pp_stats['activated']} / -{pp_stats['deactivated']} Knoten."
+                )
+                st.rerun()
+        with s_col2:
+            can_undo = is_smooth_ready and int(st.session_state.smooth_index) > 0
+            if st.button("Rückgängig", use_container_width=True, disabled=not can_undo):
+                if restore_smooth_snapshot(int(st.session_state.smooth_index) - 1):
+                    st.session_state.opt_status_type = "info"
+                    st.session_state.opt_status_msg = "Glättung rückgängig gemacht."
+                    st.rerun()
+        with s_col3:
+            can_redo = is_smooth_ready and int(st.session_state.smooth_index) < (len(st.session_state.smooth_history) - 1)
+            if st.button("Wiederholen", use_container_width=True, disabled=not can_redo):
+                if restore_smooth_snapshot(int(st.session_state.smooth_index) + 1):
+                    st.session_state.opt_status_type = "info"
+                    st.session_state.opt_status_msg = "Glättung wiederholt."
+                    st.rerun()
 
 with panel_vis:
     with st.container(border=True):
@@ -652,219 +685,18 @@ with panel_vis:
                 key="fem_metric_mode",
             )
 
-with panel_editor:
-    with st.container(border=True):
-        st.markdown("**Editor (Knoten, Kräfte, Lager)**")
-        top1, top2 = st.columns([1, 1])
-        with top1:
-            st.metric("Kräfte", len(force_rows))
-        with top2:
-            r1, r2 = st.columns(2)
-            with r1:
-                st.metric("Loslager", roller_support_count)
-            with r2:
-                st.metric("Festlager", fixed_support_count)
-
-        with st.expander("Details Kräfte/Lager", expanded=False):
-            d1, d2 = st.columns(2)
-            with d1:
-                if force_rows:
-                    st.dataframe(force_rows, use_container_width=True, hide_index=True, height=140)
-                else:
-                    st.caption("Keine Kräfte gesetzt")
-            with d2:
-                if support_rows:
-                    st.dataframe(support_rows, use_container_width=True, hide_index=True, height=140)
-                else:
-                    st.caption("Keine Lager gesetzt")
-
-        mode_cols = st.columns(3)
-        with mode_cols[0]:
-            if st.button("Knoten", use_container_width=True, key="mode_knoten"):
-                st.session_state.editor_focus_mode = "Knoten"
-        with mode_cols[1]:
-            if st.button("Kräfte", use_container_width=True, key="mode_kraefte"):
-                st.session_state.editor_focus_mode = "Kräfte"
-        with mode_cols[2]:
-            if st.button("Lager", use_container_width=True, key="mode_lager"):
-                st.session_state.editor_focus_mode = "Lager"
-
-        mode = st.session_state.editor_focus_mode
-        st.caption(f"Aktiver Modus: {mode}")
-
-        if mode == "Knoten":
-            c1, c2 = st.columns(2)
-            with c1:
-                selected_x = st.number_input("X", min_value=0, max_value=struct.width - 1, step=1, key="selected_x")
-            with c2:
-                selected_z = st.number_input("Z", min_value=0, max_value=struct.height - 1, step=1, key="selected_z")
-            selected_id = int(selected_z) * struct.width + int(selected_x)
-            selected_node = struct.nodes[selected_id]
-
-            if selected_node.fixed_x and selected_node.fixed_z:
-                support_txt = "Festlager"
-            elif (not selected_node.fixed_x) and selected_node.fixed_z:
-                support_txt = "Loslager"
-            else:
-                support_txt = "Frei"
-
-            st.caption(f"Knoten: x={int(selected_x)}, z={int(selected_z)}")
-            st.caption(
-                f"Kraft: Fx={float(selected_node.force_x):.2f}, Fz={float(selected_node.force_z):.2f} | "
-                f"Lager: {support_txt}"
-            )
-            node_active = st.checkbox("Knoten aktiv", value=bool(selected_node.active))
-            if bool(selected_node.active) != bool(node_active):
-                selected_node.active = bool(node_active)
-                reset_optimizer_state()
-
-        elif mode == "Kräfte":
-            if load_nodes:
-                sorted_load_nodes = sorted(load_nodes, key=lambda n: n.id)
-                load_label_by_id = {
-                    int(n.id): f"x={int(n.x)}, z={int(n.z)} | Fx={n.force_x:.2f}, Fz={n.force_z:.2f}"
-                    for n in sorted_load_nodes
-                }
-                load_option_ids = [-1] + [int(n.id) for n in sorted_load_nodes]
-                if int(st.session_state.existing_load_id) not in load_option_ids:
-                    st.session_state.existing_load_id = -1
-                st.selectbox(
-                    "Vorhandene Kräfte",
-                    load_option_ids,
-                    key="existing_load_id",
-                    format_func=lambda nid: "Keine Auswahl" if nid < 0 else load_label_by_id.get(nid, "Kraft"),
-                    on_change=_on_load_select_change,
-                )
-                if int(st.session_state.existing_load_id) >= 0:
-                    did = int(st.session_state.existing_load_id)
-                    dx = int(did % struct.width)
-                    dz = int(did // struct.width)
-                    if st.button(f"Kraft (x={dx}, z={dz}) löschen", use_container_width=True):
-                        target_node = struct.nodes[did]
-                        target_node.force_x = 0.0
-                        target_node.force_z = 0.0
-                        st.session_state.editor_node_id = None
-                        st.session_state.force_edit_fx = 0.0
-                        st.session_state.force_edit_fz = 0.0
-                        reset_optimizer_state()
-                        st.success(f"Kraft bei x={dx}, z={dz} gelöscht.")
-                        st.rerun()
-
-            c1, c2 = st.columns(2)
-            with c1:
-                selected_x = st.number_input("X", min_value=0, max_value=struct.width - 1, step=1, key="selected_x")
-            with c2:
-                selected_z = st.number_input("Z", min_value=0, max_value=struct.height - 1, step=1, key="selected_z")
-            selected_id = int(selected_z) * struct.width + int(selected_x)
-            selected_node = struct.nodes[selected_id]
-            if st.session_state.editor_node_id != selected_id:
-                st.session_state.editor_node_id = selected_id
-                st.session_state.force_edit_fx = float(selected_node.force_x)
-                st.session_state.force_edit_fz = float(selected_node.force_z)
-
-            f1, f2 = st.columns(2)
-            with f1:
-                new_fx = st.number_input("Kraft X", key="force_edit_fx", step=1.0, format="%.2f")
-            with f2:
-                new_fz = st.number_input("Kraft Z", key="force_edit_fz", step=1.0, format="%.2f")
-            changed_force = (
-                float(selected_node.force_x) != float(new_fx)
-                or float(selected_node.force_z) != float(new_fz)
-            )
-            if changed_force:
-                selected_node.force_x = float(new_fx)
-                selected_node.force_z = float(new_fz)
-                reset_optimizer_state()
-
-        else:
-            if support_nodes:
-                support_label_by_id = {}
-                sorted_support_nodes = sorted(support_nodes, key=lambda n: n.id)
-                for n in sorted_support_nodes:
-                    if n.fixed_x and n.fixed_z:
-                        s_txt = "Festlager"
-                    elif (not n.fixed_x) and n.fixed_z:
-                        s_txt = "Loslager"
-                    else:
-                        s_txt = "Sonderfall"
-                    support_label_by_id[int(n.id)] = f"x={int(n.x)}, z={int(n.z)} | {s_txt}"
-
-                support_option_ids = [-1] + [int(n.id) for n in sorted_support_nodes]
-                if int(st.session_state.existing_support_id) not in support_option_ids:
-                    st.session_state.existing_support_id = -1
-                st.selectbox(
-                    "Vorhandene Lager",
-                    support_option_ids,
-                    key="existing_support_id",
-                    format_func=lambda nid: "Keine Auswahl" if nid < 0 else support_label_by_id.get(nid, "Lager"),
-                    on_change=_on_support_select_change,
-                )
-                if int(st.session_state.existing_support_id) >= 0:
-                    did = int(st.session_state.existing_support_id)
-                    dx = int(did % struct.width)
-                    dz = int(did // struct.width)
-                    if st.button(f"Lager (x={dx}, z={dz}) löschen", use_container_width=True):
-                        target_node = struct.nodes[did]
-                        target_node.fixed_x = False
-                        target_node.fixed_z = False
-                        st.session_state.editor_node_id = None
-                        st.session_state.support_edit_mode = "Frei"
-                        reset_optimizer_state()
-                        st.success(f"Lager bei x={dx}, z={dz} gelöscht.")
-                        st.rerun()
-
-            c1, c2 = st.columns(2)
-            with c1:
-                selected_x = st.number_input("X", min_value=0, max_value=struct.width - 1, step=1, key="selected_x")
-            with c2:
-                selected_z = st.number_input("Z", min_value=0, max_value=struct.height - 1, step=1, key="selected_z")
-            selected_id = int(selected_z) * struct.width + int(selected_x)
-            selected_node = struct.nodes[selected_id]
-            if st.session_state.editor_node_id != selected_id:
-                st.session_state.editor_node_id = selected_id
-                if selected_node.fixed_x and selected_node.fixed_z:
-                    st.session_state.support_edit_mode = "Festlager"
-                elif (not selected_node.fixed_x) and selected_node.fixed_z:
-                    st.session_state.support_edit_mode = "Loslager"
-                else:
-                    st.session_state.support_edit_mode = "Frei"
-
-            support_mode = st.selectbox(
-                "Lagerzustand",
-                ["Frei", "Loslager", "Festlager"],
-                key="support_edit_mode",
-            )
-            if support_mode == "Frei":
-                new_fixed_x = False
-                new_fixed_z = False
-            elif support_mode == "Loslager":
-                new_fixed_x = False
-                new_fixed_z = True
-            else:
-                new_fixed_x = True
-                new_fixed_z = True
-            changed_support = (
-                bool(selected_node.fixed_x) != bool(new_fixed_x)
-                or bool(selected_node.fixed_z) != bool(new_fixed_z)
-            )
-            if changed_support:
-                selected_node.fixed_x = bool(new_fixed_x)
-                selected_node.fixed_z = bool(new_fixed_z)
-                reset_optimizer_state()
-
 # Live status + optimization loop
 live_active = sum(1 for n in struct.nodes if n.active)
 live_percent = (live_active / total_nodes) * 100
-mass_info_placeholder.info(f"Aktuelle Masse: {live_percent:.1f}%")
-nodes_to_remove_total = max(int(st.session_state.opt_start_active) - int(st.session_state.opt_target_count), 0)
-removed_so_far = max(int(st.session_state.opt_start_active) - live_active, 0)
-if nodes_to_remove_total > 0:
-    progress_bar.progress(min(max(removed_so_far / nodes_to_remove_total, 0.0), 1.0))
+start_active_for_progress = int(st.session_state.opt_start_active) if int(st.session_state.opt_start_active) > 0 else total_nodes
+mass_fraction = live_active / max(1, start_active_for_progress)
+opt_mass_placeholder.caption(f"{live_percent:.1f}%")
+opt_progress_bar.progress(min(max(mass_fraction, 0.0), 1.0))
 
 if st.session_state.opt_initialized:
     run_state = "Läuft" if st.session_state.opt_running else "Pausiert"
     current_rate = 0.01 if int(st.session_state.opt_iteration) < 5 else 0.015
-    status_container.info(
+    opt_status_placeholder.info(
         f"Status: {run_state} | Iter: {int(st.session_state.opt_iteration)} | "
         f"Remove-Rate: {current_rate * 100:.1f}%"
     )
@@ -900,25 +732,21 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
         push_opt_snapshot(struct)
         live_active = sum(1 for n in struct.nodes if n.active)
         live_percent = (live_active / total_nodes) * 100
-        mass_info_placeholder.info(f"Aktuelle Masse: {live_percent:.1f}%")
         current_rate = 0.01 if int(st.session_state.opt_iteration) < 5 else 0.015
-        status_container.info(
+        opt_status_placeholder.info(
             f"Status: Läuft | Iter: {int(st.session_state.opt_iteration)} | "
             f"Remove-Rate: {current_rate * 100:.1f}%"
         )
-        plot_status_placeholder.caption(
-            f"Aktive Knoten: {live_active} / {total_nodes} ({live_percent:.1f}%)"
-        )
-        nodes_to_remove_total = max(int(st.session_state.opt_start_active) - int(st.session_state.opt_target_count), 0)
-        removed_so_far = max(int(st.session_state.opt_start_active) - live_active, 0)
-        if nodes_to_remove_total > 0:
-            progress_bar.progress(min(max(removed_so_far / nodes_to_remove_total, 0.0), 1.0))
+        start_active_for_progress = int(st.session_state.opt_start_active) if int(st.session_state.opt_start_active) > 0 else total_nodes
+        mass_fraction = live_active / max(1, start_active_for_progress)
+        opt_mass_placeholder.caption(f"{live_percent:.1f}%")
+        opt_progress_bar.progress(min(max(mass_fraction, 0.0), 1.0))
 
         fig = Visualizer.plot_structure(
             struct,
             show_deformation=bool(st.session_state.show_deformation),
             scale_factor=(float(st.session_state.deformation_display_percent) / 100.0) if bool(st.session_state.show_deformation) else 0.0,
-            selected_node_id=int(st.session_state.selected_z) * struct.width + int(st.session_state.selected_x),
+            selected_node_id=None,
             colorize_elements=bool(st.session_state.fem_colormap),
             color_percentile=color_percentile,
             show_background_nodes=not bool(st.session_state.fem_colormap),
@@ -934,6 +762,7 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
             }.get(st.session_state.fem_metric_mode, "energy_per_length"),
             normalize_mode=normalize_mode,
             element_filter={"Alle": "all", "H+V": "hv", "Diagonal": "diag"}.get(st.session_state.element_focus_radio, "all"),
+            show_colorbar=False,
         )
         plot_placeholder.pyplot(fig)
         plt.close(fig)
@@ -944,6 +773,41 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
         st.session_state.opt_finished = True
         st.session_state.smooth_history = [struct.to_dict()]
         st.session_state.smooth_index = 0
+        current_signature = (
+            len(st.session_state.opt_history),
+            bool(st.session_state.show_deformation),
+            int(st.session_state.deformation_display_percent),
+            bool(st.session_state.fem_colormap),
+            str(st.session_state.fem_metric_mode),
+            str(st.session_state.element_focus_radio),
+            float(st.session_state.line_width_slider),
+        )
+        if st.session_state.opt_gif_signature != current_signature:
+            st.session_state.opt_gif_bytes = build_gif_bytes(
+                history=st.session_state.opt_history,
+                show_deformation=bool(st.session_state.show_deformation),
+                scale_factor=(float(st.session_state.deformation_display_percent) / 100.0)
+                if bool(st.session_state.show_deformation)
+                else 0.0,
+                fem_color_map=bool(st.session_state.fem_colormap),
+                color_percentile=color_percentile,
+                show_background_nodes=not bool(st.session_state.fem_colormap),
+                line_width=float(st.session_state.line_width_slider),
+                color_levels=color_levels,
+                fixed_color_vmax=fixed_color_vmax,
+                metric_mode={
+                    "Energie/Länge": "energy_per_length",
+                    "Dehnung": "strain",
+                    "Verschiebung": "displacement",
+                    "Strain": "strain",
+                    "Displacement": "displacement",
+                }.get(st.session_state.fem_metric_mode, "energy_per_length"),
+                normalize_mode=normalize_mode,
+                element_filter={"Alle": "all", "H+V": "hv", "Diagonal": "diag"}.get(
+                    st.session_state.element_focus_radio, "all"
+                ),
+            )
+            st.session_state.opt_gif_signature = current_signature
         if "Limit" in stop_reason or "Zu weich" in stop_reason or "Keine weiteren" in stop_reason:
             st.session_state.opt_status_type = "success"
             st.session_state.opt_status_msg = f"Optimierung fertig: {stop_reason}"
@@ -960,16 +824,14 @@ if st.session_state.opt_initialized and st.session_state.opt_running:
 status_msg = str(st.session_state.opt_status_msg).strip()
 if status_msg:
     if st.session_state.opt_status_type == "success":
-        message_placeholder.success(status_msg)
+        opt_message_placeholder.success(status_msg)
     elif st.session_state.opt_status_type == "error":
-        message_placeholder.error(status_msg)
+        opt_message_placeholder.error(status_msg)
     else:
-        message_placeholder.info(status_msg)
+        opt_message_placeholder.info(status_msg)
 
 final_percent = (sum(1 for n in struct.nodes if n.active) / total_nodes) * 100
-plot_status_placeholder.caption(
-    f"Aktive Knoten: {sum(1 for n in struct.nodes if n.active)} / {total_nodes} ({final_percent:.1f}%)"
-)
+opt_mass_placeholder.caption(f"{final_percent:.1f}%")
 
 
 # Erweiterung: Report & Gif 
@@ -1013,71 +875,3 @@ if "opt_history" in st.session_state and st.session_state.opt_history:
     with col_chart2:
         st.markdown("**Max. Verformung über Iterationen**")
         st.line_chart(disp_data)
-
-    # GIF-Animation generieren
-    st.markdown("**Animation exportieren**")
-    st.caption("Generiert ein .gif-Datei des Optimierungsverlaufs. Bei langen Optimierungen werden Zwischenschritte übersprungen, um die Dateigröße klein zu halten.")
-    
-    if st.button("GIF-Animation generieren", use_container_width=True):
-        with st.spinner("Generiere GIF (das kann einen Moment dauern)..."):
-            frames = []
-            history_len = len(st.session_state.opt_history)
-            
-            # Max. 35 Bilder für das GIF rendern, um Zeit zu sparen
-            step = max(1, history_len // 35) 
-            indices_to_render = list(range(0, history_len, step))
-            if indices_to_render[-1] != history_len - 1: 
-                indices_to_render.append(history_len - 1) # Immer das finale Bild mitnehmen
-                
-            for i in indices_to_render:
-                temp_struct = Structure.from_dict(st.session_state.opt_history[i])  # Struktur aus der Historie wiederherstellen
-                
-                # Visualizer aufrufen (aktuelle UI-Einstellungen)
-                fig = Visualizer.plot_structure(
-                    temp_struct,
-                    show_deformation=show_deformation,
-                    scale_factor=scale,
-                    selected_node_id=None, # nicht notwendig
-                    colorize_elements=fem_color_map,
-                    color_percentile=color_percentile,
-                    show_background_nodes=show_background_nodes,
-                    line_width=line_width,
-                    color_levels=color_levels,
-                    fixed_color_vmax=fixed_color_vmax,
-                    metric_mode=metric_mode,
-                    normalize_mode=normalize_mode,
-                    element_filter=element_filter,
-                )
-                
-                # Matplotlib Plot in Arbeitsspeicher speichern (als PNG)
-                buf = io.BytesIO()
-                fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor='white')
-                buf.seek(0)
-                
-                # Bild für das GIF sammeln
-                frames.append(Image.open(buf))
-                
-                # Speicher freigeben, sonst stürzt App ab
-                plt.close(fig) 
-                
-            # Frames zu GIF zusamnensetzen
-            if frames:
-                gif_buf = io.BytesIO()
-                frames[0].save(
-                    gif_buf,
-                    format="GIF",
-                    save_all=True,
-                    append_images=frames[1:],
-                    duration=200,  # 200 Millisekunden pro Bild
-                    loop=0         # 0 = unendlich oft wiederholen (Endlos-Loop)
-                )
-                
-                # Download-Button für GIF
-                st.success("GIF erfolgreich generiert!")
-                st.download_button(
-                    label="Animation (.gif) herunterladen",
-                    data=gif_buf.getvalue(),
-                    file_name="topologie_animation.gif",
-                    mime="image/gif",
-                    use_container_width=True
-                )
