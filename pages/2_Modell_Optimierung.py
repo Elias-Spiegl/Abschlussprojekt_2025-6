@@ -743,11 +743,12 @@ with row_top_left:
                 st.success("Modell gespeichert.")
                 st.rerun()
 
+    # Optimierungsparameter und Steuerung
     with st.container(border=True):
-        st.markdown("**Automation**")
-        target_mass_percent = st.slider("Ziel-Masse (%)", 10, 99, 50)
+        st.markdown("**Optimierungsparameter**")
+        target_mass_percent = st.slider("Ziel-Masse (%)", 10, 99, 70)
         max_stiffness_loss_percent = st.slider(
-            "Max. Steifigkeitsverlust (%)", 0, 100, 50, step=1
+            "Max. Steifigkeitsverlust (%)", 0, 100, 60, step=1
         )
         allowed_softening_ratio = 1.0 + (max_stiffness_loss_percent / 100.0)
 
@@ -823,7 +824,7 @@ with row_top_right:
     status_col, export_col = st.columns([3.2, 1.0])
     with status_col:
         with st.container(border=True):
-            st.markdown("**Optimizer Status**")
+            st.markdown("**Optimierer Status**")    # Statusinformationen und Fehlermeldungen
             opt_status_placeholder = st.empty()
             st.markdown("### Masse")
             opt_mass_placeholder = st.empty()
@@ -1114,7 +1115,7 @@ with panel_vis:
                 current_percent = 100
                 st.session_state.deformation_display_percent = 100
             deformation_percent_ui = st.slider(
-                "Verformungsdarstellung (%)", 0, 1000, step=5,
+                "Verformungsdarstellung (%)", 0, 300, step=5,
                 value=current_percent,
                 key="deformation_display_percent_slider",
                 help="100% = echte berechnete Verformung, 200% = doppelt dargestellt, 0% = undeformiert.",
